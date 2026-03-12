@@ -1,0 +1,2 @@
+# easyRAG
+powersync hackathon
