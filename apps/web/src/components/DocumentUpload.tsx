@@ -52,12 +52,13 @@ export function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
     (fileList: FileList | null) => {
       if (!fileList) return;
       for (const file of Array.from(fileList)) {
-        const ext = '.' + file.name.split('.').pop()?.toLowerCase();
-        if (!ACCEPTED_EXTENSIONS.includes(ext)) {
+        const rawExt = file.name.split('.').pop();
+        const ext = rawExt ? '.' + rawExt.toLowerCase() : '';
+        if (!ext || !ACCEPTED_EXTENSIONS.includes(ext)) {
           const id = crypto.randomUUID();
           setItems((prev) => [
             ...prev,
-            { id, file, status: 'error', error: `File type '${ext}' is not supported` },
+            { id, file, status: 'error', error: `File type '${ext || '(unknown)'}' is not supported` },
           ]);
           continue;
         }

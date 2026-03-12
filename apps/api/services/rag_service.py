@@ -174,7 +174,7 @@ class RAGService:
         else:
             full_question = question
 
-        result = await self._rag.aquery(full_question, param=type("QueryParam", (), {"mode": mode})())
+        result = await self._rag.aquery(full_question, mode=mode)
 
         if isinstance(result, str):
             return {"answer": result, "sources": []}

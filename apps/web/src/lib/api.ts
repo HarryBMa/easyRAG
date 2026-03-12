@@ -4,9 +4,11 @@ export interface ApiError {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData = init?.body instanceof FormData;
+  const defaultHeaders = isFormData ? {} : { 'Content-Type': 'application/json' };
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
+    headers: { ...defaultHeaders, ...init?.headers },
   });
 
   if (!res.ok) {
@@ -44,8 +46,6 @@ export const api = {
   upload<T>(path: string, formData: FormData): Promise<T> {
     return request<T>(path, {
       method: 'POST',
-      // Let browser set Content-Type with boundary
-      headers: {},
       body: formData,
     });
   },

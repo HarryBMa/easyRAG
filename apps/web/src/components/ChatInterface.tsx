@@ -155,7 +155,7 @@ export function ChatInterface({ specialistId }: ChatInterfaceProps) {
               >
                 <strong>Sources:</strong>{' '}
                 {(msg.sources as string[]).map((s, i) => (
-                  <span key={i}>{typeof s === 'string' ? s : JSON.stringify(s)}{i < msg.sources!.length - 1 ? ' · ' : ''}</span>
+                  <span key={i}>{typeof s === 'string' ? s : JSON.stringify(s)}{i < (msg.sources?.length ?? 0) - 1 ? ' · ' : ''}</span>
                 ))}
               </div>
             )}
