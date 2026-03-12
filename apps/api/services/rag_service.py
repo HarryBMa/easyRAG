@@ -78,7 +78,6 @@ class RAGService:
                 **kwargs: Any,
             ) -> str:
                 if image_data:
-                    from lightrag.llm.openai import openai_complete_if_cache
                     return await openai_complete_if_cache(
                         "gpt-4o",
                         prompt,

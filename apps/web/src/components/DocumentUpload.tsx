@@ -30,7 +30,7 @@ export function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
   }
 
-  async function processFile(file: File) {
+  const processFile = useCallback(async (file: File) => {
     const id = crypto.randomUUID();
     setItems((prev) => [...prev, { id, file, status: 'pending' }]);
     updateItem(id, { status: 'uploading' });
@@ -46,23 +46,26 @@ export function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
       const msg = (err as { detail?: string }).detail ?? 'Upload failed';
       updateItem(id, { status: 'error', error: msg });
     }
-  }
+  }, [onUploadComplete]);
 
-  function handleFiles(fileList: FileList | null) {
-    if (!fileList) return;
-    for (const file of Array.from(fileList)) {
-      const ext = '.' + file.name.split('.').pop()?.toLowerCase();
-      if (!ACCEPTED_EXTENSIONS.includes(ext)) {
-        const id = crypto.randomUUID();
-        setItems((prev) => [
-          ...prev,
-          { id, file, status: 'error', error: `File type '${ext}' is not supported` },
-        ]);
-        continue;
+  const handleFiles = useCallback(
+    (fileList: FileList | null) => {
+      if (!fileList) return;
+      for (const file of Array.from(fileList)) {
+        const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+        if (!ACCEPTED_EXTENSIONS.includes(ext)) {
+          const id = crypto.randomUUID();
+          setItems((prev) => [
+            ...prev,
+            { id, file, status: 'error', error: `File type '${ext}' is not supported` },
+          ]);
+          continue;
+        }
+        processFile(file);
       }
-      processFile(file);
-    }
-  }
+    },
+    [processFile],
+  );
 
   const onDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -70,7 +73,7 @@ export function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
       setDragging(false);
       handleFiles(e.dataTransfer.files);
     },
-    [],
+    [handleFiles],
   );
 
   const statusIcon = (status: UploadItem['status']) => {

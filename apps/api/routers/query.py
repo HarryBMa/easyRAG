@@ -46,7 +46,7 @@ async def query_rag(body: QueryRequest) -> QueryResponse:
 
 
 @router.get("/modes")
-async def list_modes() -> dict[str, list[str]]:
+async def list_modes() -> dict[str, list[dict[str, str]]]:
     """Return the available RAG query modes."""
     return {
         "modes": [
