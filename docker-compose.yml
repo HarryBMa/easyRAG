@@ -1,26 +1,6 @@
 version: "3.9"
 
 services:
-  # Milvus vector store (standalone mode)
-  milvus:
-    image: milvusdb/milvus:v2.4.9
-    command: milvus run standalone
-    environment:
-      ETCD_USE_EMBED: "true"
-      ETCD_DATA_DIR: /var/lib/milvus/etcd
-      ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml
-      COMMON_STORAGETYPE: local
-    volumes:
-      - milvus_data:/var/lib/milvus
-    ports:
-      - "19530:19530"
-      - "9091:9091"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-
   # Ollama — local LLM inference (MedGemma / Llama)
   ollama:
     image: ollama/ollama:latest
@@ -38,5 +18,4 @@ services:
     #           capabilities: [gpu]
 
 volumes:
-  milvus_data:
   ollama_data:

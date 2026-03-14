@@ -42,7 +42,7 @@ export const APIRoute = createAPIFileRoute('/api/vote')({
       })
       // Undo previous vote
       await db.execute({
-        sql: `UPDATE ${table} SET ${prev === 'up' ? 'upvotes' : 'downvotes'} = MAX(0, ${prev === 'up' ? 'upvotes' : 'downvotes'} - 1) WHERE id = ?`,
+        sql: `UPDATE ${table} SET ${prev === 'up' ? 'upvotes' : 'downvotes'} = GREATEST(0, ${prev === 'up' ? 'upvotes' : 'downvotes'} - 1) WHERE id = ?`,
         args: [entity_id],
       })
       // If toggling (different direction), record new vote

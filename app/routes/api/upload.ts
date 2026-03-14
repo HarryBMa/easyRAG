@@ -64,7 +64,7 @@ async function processGuideline(
     sql: `UPDATE guidelines
           SET title = ?, hospital = ?, category = ?, raw_text = ?,
               structured_json = ?, confidence_score = ?, source_quality = ?,
-              status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              status = ?, updated_at = NOW()
           WHERE id = ?`,
     args: [
       structured.title,
@@ -95,7 +95,7 @@ async function processGuideline(
       })),
     )
   } catch (err) {
-    console.warn('[upload] Milvus indexing skipped:', (err as Error).message)
+    console.warn('[upload] pgvector indexing skipped:', (err as Error).message)
   }
 
   // 6. Trigger PubMed verification via Supabase Edge (best-effort)

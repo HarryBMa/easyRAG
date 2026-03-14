@@ -2,7 +2,7 @@ import { createAPIFileRoute } from '@tanstack/react-start/api'
 import { streamText } from 'ai'
 import { openai } from '@ai-sdk/openai'
 import { embed } from '../../../lib/embed'
-import { ensureCollection, getMilvusClient } from '../../../lib/milvus'
+import { ensureCollection, searchSimilar } from '../../../lib/milvus'
 
 export const APIRoute = createAPIFileRoute('/api/query')({
   POST: async ({ request }) => {
@@ -19,25 +19,15 @@ export const APIRoute = createAPIFileRoute('/api/query')({
     }
 
     await ensureCollection()
-    const milvus = getMilvusClient()
 
     const queryEmbedding = await embed(question)
 
-    const searchParams: Record<string, unknown> = {
-      collection_name: 'document_chunks',
-      data: [queryEmbedding],
-      anns_field: 'embedding',
-      limit: 6,
-      output_fields: ['doc_id', 'content', 'chunk_index'],
-      metric_type: 'COSINE',
-    }
-
+    let filter: string | undefined
     if (docIds?.length) {
-      searchParams.filter = `doc_id in [${docIds.map((id) => `"${id}"`).join(', ')}]`
+      filter = `guideline_id in [${docIds.map((id) => `"${id}"`).join(', ')}]`
     }
 
-    const results = await milvus.search(searchParams)
-    const hits = results.results ?? []
+    const hits = await searchSimilar(queryEmbedding, 6, filter)
 
     const context = hits
       .map((h, i) => `[${i + 1}] ${h.content}`)

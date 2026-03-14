@@ -13,7 +13,7 @@ const STAGE_LABELS: Record<Stage, string> = {
   idle:       'Ready to upload',
   ocr:        'OCR extraction in progress…',
   structuring:'MedGemma structuring guideline…',
-  indexing:   'Indexing in Milvus…',
+  indexing:   'Indexing in pgvector…',
   done:       'Done! Guideline added.',
   error:      'Upload failed',
 }

@@ -1,30 +1,29 @@
-import Database from 'better-sqlite3'
-import { mkdirSync } from 'fs'
-import { join } from 'path'
+import postgres from 'postgres'
 
-let db: Database.Database | null = null
+let connection: postgres.Sql | null = null
 
-export function getDb(): Database.Database {
-  if (db) return db
+export function getSql(): postgres.Sql {
+  if (!connection) {
+    connection = postgres(process.env.DATABASE_URL!)
+  }
+  return connection
+}
 
-  const dataDir = join(process.cwd(), 'data')
-  mkdirSync(dataDir, { recursive: true })
+export async function getDb() {
+  const sql = getSql()
 
-  db = new Database(join(dataDir, 'easyrag.db'))
-  db.pragma('journal_mode = WAL')
-
-  db.exec(`
+  await sql`
     CREATE TABLE IF NOT EXISTS documents (
-      id        TEXT PRIMARY KEY,
-      name      TEXT NOT NULL,
-      category  TEXT DEFAULT 'uncategorized',
-      status    TEXT DEFAULT 'processing',
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      category    TEXT DEFAULT 'uncategorized',
+      status      TEXT DEFAULT 'processing',
       chunk_count INTEGER DEFAULT 0,
-      file_size INTEGER,
-      mime_type TEXT,
-      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      file_size   INTEGER,
+      mime_type   TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
     )
-  `)
+  `
 
-  return db
+  return sql
 }

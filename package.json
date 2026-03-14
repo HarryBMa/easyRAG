@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^1.1.0",
-    "@libsql/client": "^0.14.0",
+    "postgres": "^3.4.5",
     "@powersync/react": "^1.5.0",
     "@powersync/web": "^1.5.0",
     "@radix-ui/react-dialog": "^1.1.4",
@@ -20,7 +20,6 @@
     "@tanstack/react-query": "^5.62.8",
     "@tanstack/react-router": "^1.114.0",
     "@tanstack/react-start": "^1.114.0",
-    "@zilliz/milvus2-sdk-node": "^2.4.9",
     "ai": "^4.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

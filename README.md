@@ -17,8 +17,8 @@ ProtocolSync AI ingests anesthesia protocols from any format (scanned PDFs, imag
 | **PubMed verification** | Supabase Edge Function → NCBI E-utilities |
 | **Crowd-sourced tricks** | Stack Overflow-style upvote system with auto-badges |
 | **Research gaps** | Surfaces tricks used at 5+ hospitals with 0 studies |
-| **Offline-first sync** | PowerSync + Turso (libSQL) |
-| **Vector search** | Milvus for semantic guideline retrieval |
+| **Offline-first sync** | PowerSync + Supabase Postgres |
+| **Vector search** | pgvector (HNSW cosine) for semantic guideline retrieval |
 
 ---
 
@@ -28,7 +28,7 @@ ProtocolSync AI ingests anesthesia protocols from any format (scanned PDFs, imag
 
 - Node.js 20+
 - [Ollama](https://ollama.ai) with MedGemma: `ollama pull medgemma`
-- Docker (for Milvus)
+- A [Supabase](https://supabase.com) project (free tier works)
 
 ### 1. Clone & install
 
@@ -38,7 +38,7 @@ cd easyRAG
 npm install
 ```
 
-### 2. Start Milvus + Ollama
+### 2. Start Ollama
 
 ```bash
 docker compose up -d
@@ -49,8 +49,9 @@ docker compose up -d
 ```bash
 cp .env.example .env
 # Minimum required:
-#   OPENAI_API_KEY   — for embeddings
-#   TURSO_DATABASE_URL defaults to file:data/protocolsync.db (no setup needed)
+#   DATABASE_URL   — Supabase Postgres connection string
+#   OPENAI_API_KEY — for embeddings
+#   SUPABASE_URL + SUPABASE_ANON_KEY — for PubMed edge function
 ```
 
 ### 4. Run
@@ -66,9 +67,9 @@ npm run dev
 
 ```
 Browser (TanStack Start + React)
-  ├── PowerSync ─────────────── offline-first SQLite sync
+  ├── PowerSync ─────────────── offline-first Postgres sync
   └── REST API
-        ├── /api/upload ──────── OCR → MedGemma → Turso + Milvus
+        ├── /api/upload ──────── OCR → MedGemma → Supabase Postgres + pgvector
         ├── /api/guidelines ──── CRUD + trending sort
         ├── /api/tricks ─────── crowd tips + voting
         ├── /api/vote ────────── upvote / downvote
@@ -78,8 +79,8 @@ Lib:
   lib/ocr.ts        Tesseract.js (DeepSeek-OCR-2 swap-in)
   lib/medllm.ts     Ollama → MedGemma structuring + categorization
   lib/scoring.ts    Confidence scoring + trash detection + badges
-  lib/turso.ts      Turso / libSQL client + schema init
-  lib/milvus.ts     Vector store (HNSW cosine, Milvus 2.4)
+  lib/turso.ts      Supabase Postgres client + schema init
+  lib/milvus.ts     Vector store (HNSW cosine, pgvector)
   lib/embed.ts      OpenAI text-embedding-3-small (pluggable)
   lib/powersync.ts  Browser-side PowerSync client
 
@@ -95,9 +96,9 @@ Supabase Edge:
 |---|---|
 | Frontend | TanStack Start · React 19 · Tailwind CSS v4 |
 | State | TanStack Query |
-| Database | Turso (libSQL) |
+| Database | Supabase Postgres |
 | Sync | PowerSync |
-| Vector store | Milvus v2.4 |
+| Vector store | pgvector (HNSW cosine) |
 | OCR | Tesseract.js 5 (local WASM) |
 | Medical LLM | MedGemma via Ollama |
 | Embeddings | OpenAI text-embedding-3-small |
@@ -110,8 +111,8 @@ Supabase Edge:
 See [`.env.example`](.env.example). Minimum for local dev:
 
 ```
+DATABASE_URL=postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
 OPENAI_API_KEY=sk-...
-TURSO_DATABASE_URL=file:data/protocolsync.db
 OLLAMA_MODEL=medgemma
 ```
 
@@ -124,7 +125,7 @@ OLLAMA_MODEL=medgemma
 ## PowerSync setup
 
 1. Create project at [app.powersync.com](https://app.powersync.com)
-2. Connect your Turso database
+2. Connect your Supabase Postgres database
 3. Upload `sync-rules.yaml`
 4. Set `VITE_POWERSYNC_URL` + `VITE_POWERSYNC_TOKEN` in `.env`
 

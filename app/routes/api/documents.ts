@@ -1,16 +1,15 @@
 import { createAPIFileRoute } from '@tanstack/react-start/api'
 import { getDb } from '../../../lib/db'
-import { getMilvusClient } from '../../../lib/milvus'
+import { deleteByGuideline } from '../../../lib/milvus'
 
 export const APIRoute = createAPIFileRoute('/api/documents')({
   GET: async () => {
-    const db = getDb()
-    const documents = db
-      .prepare(
-        `SELECT id, name, category, status, chunk_count, file_size, mime_type, created_at
-         FROM documents ORDER BY created_at DESC`,
-      )
-      .all()
+    const sql = await getDb()
+    const documents = await sql`
+      SELECT id, name, category, status, chunk_count, file_size, mime_type, created_at
+      FROM documents
+      ORDER BY created_at DESC
+    `
 
     return new Response(JSON.stringify(documents), {
       headers: { 'Content-Type': 'application/json' },
@@ -26,18 +25,13 @@ export const APIRoute = createAPIFileRoute('/api/documents')({
       })
     }
 
-    const db = getDb()
-    db.prepare(`DELETE FROM documents WHERE id = ?`).run(id)
+    const sql = await getDb()
+    await sql`DELETE FROM documents WHERE id = ${id}`
 
-    // Remove chunks from Milvus
     try {
-      const milvus = getMilvusClient()
-      await milvus.delete({
-        collection_name: 'document_chunks',
-        filter: `doc_id == "${id}"`,
-      })
+      await deleteByGuideline(id)
     } catch {
-      // Milvus may not be running; document is already removed from DB
+      // pgvector may not be set up; document is already removed from DB
     }
 
     return new Response(JSON.stringify({ ok: true }), {

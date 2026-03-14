@@ -1,47 +1,33 @@
-import { MilvusClient, DataType } from '@zilliz/milvus2-sdk-node'
+import postgres from 'postgres'
 
-const COLLECTION = 'protocol_chunks'
 const DIM = parseInt(process.env.EMBEDDING_DIM ?? '1536', 10)
 
-let client: MilvusClient | null = null
+let connection: postgres.Sql | null = null
 
-export function getMilvusClient(): MilvusClient {
-  if (!client) {
-    client = new MilvusClient({
-      address: process.env.MILVUS_ADDRESS ?? 'localhost:19530',
-      token: process.env.MILVUS_TOKEN,
-    })
+function getConnection(): postgres.Sql {
+  if (!connection) {
+    connection = postgres(process.env.DATABASE_URL!)
   }
-  return client
+  return connection
 }
 
 export async function ensureCollection(): Promise<void> {
-  const c = getMilvusClient()
-  const { value: exists } = await c.hasCollection({ collection_name: COLLECTION })
-  if (exists) return
-
-  await c.createCollection({
-    collection_name: COLLECTION,
-    fields: [
-      { name: 'id', data_type: DataType.VarChar, max_length: 80, is_primary_key: true, auto_id: false },
-      { name: 'guideline_id', data_type: DataType.VarChar, max_length: 64 },
-      { name: 'entity_type', data_type: DataType.VarChar, max_length: 16 }, // 'guideline' | 'trick'
-      { name: 'content', data_type: DataType.VarChar, max_length: 4096 },
-      { name: 'chunk_index', data_type: DataType.Int32 },
-      { name: 'embedding', data_type: DataType.FloatVector, dim: DIM },
-    ],
-    enable_dynamic_field: false,
-  })
-
-  await c.createIndex({
-    collection_name: COLLECTION,
-    field_name: 'embedding',
-    index_type: 'HNSW',
-    metric_type: 'COSINE',
-    params: { M: 16, efConstruction: 64 },
-  })
-
-  await c.loadCollection({ collection_name: COLLECTION })
+  const sql = getConnection()
+  await sql`CREATE EXTENSION IF NOT EXISTS vector`
+  await sql`
+    CREATE TABLE IF NOT EXISTS protocol_chunks (
+      id           TEXT PRIMARY KEY,
+      guideline_id TEXT NOT NULL,
+      entity_type  TEXT NOT NULL,
+      content      TEXT NOT NULL,
+      chunk_index  INTEGER NOT NULL,
+      embedding    vector(${sql.unsafe(String(DIM))})
+    )
+  `
+  await sql`
+    CREATE INDEX IF NOT EXISTS protocol_chunks_embedding_idx
+    ON protocol_chunks USING hnsw (embedding vector_cosine_ops)
+  `
 }
 
 export interface ChunkEntity {
@@ -55,8 +41,17 @@ export interface ChunkEntity {
 
 export async function upsertChunks(entities: ChunkEntity[]): Promise<void> {
   if (!entities.length) return
-  const c = getMilvusClient()
-  await c.insert({ collection_name: COLLECTION, data: entities })
+  const sql = getConnection()
+  for (const e of entities) {
+    const vec = `[${e.embedding.join(',')}]`
+    await sql`
+      INSERT INTO protocol_chunks (id, guideline_id, entity_type, content, chunk_index, embedding)
+      VALUES (${e.id}, ${e.guideline_id}, ${e.entity_type}, ${e.content}, ${e.chunk_index}, ${vec}::vector)
+      ON CONFLICT (id) DO UPDATE
+        SET content = EXCLUDED.content,
+            embedding = EXCLUDED.embedding
+    `
+  }
 }
 
 export async function searchSimilar(
@@ -64,29 +59,48 @@ export async function searchSimilar(
   limit = 6,
   filter?: string,
 ): Promise<{ guideline_id: string; content: string; score: number }[]> {
-  const c = getMilvusClient()
-  const params: Record<string, unknown> = {
-    collection_name: COLLECTION,
-    data: [embedding],
-    anns_field: 'embedding',
-    limit,
-    output_fields: ['guideline_id', 'content'],
-    metric_type: 'COSINE',
-  }
-  if (filter) params.filter = filter
+  const sql = getConnection()
+  const vec = `[${embedding.join(',')}]`
 
-  const results = await c.search(params)
-  return (results.results ?? []).map((h) => ({
-    guideline_id: h.guideline_id as string,
-    content: h.content as string,
-    score: h.score as number,
-  }))
+  let rows: { guideline_id: string; content: string; score: number }[]
+
+  if (filter) {
+    // filter is a guideline_id IN list expressed as comma-separated quoted ids
+    // e.g. `guideline_id in ["id1","id2"]` — parse to extract ids
+    const match = filter.match(/guideline_id\s+in\s+\[([^\]]+)\]/i)
+    if (match) {
+      const ids = match[1].split(',').map((s) => s.trim().replace(/^"|"$/g, ''))
+      rows = await sql`
+        SELECT guideline_id, content,
+               1 - (embedding <=> ${vec}::vector) AS score
+        FROM protocol_chunks
+        WHERE guideline_id = ANY(${ids})
+        ORDER BY embedding <=> ${vec}::vector
+        LIMIT ${limit}
+      `
+    } else {
+      rows = await sql`
+        SELECT guideline_id, content,
+               1 - (embedding <=> ${vec}::vector) AS score
+        FROM protocol_chunks
+        ORDER BY embedding <=> ${vec}::vector
+        LIMIT ${limit}
+      `
+    }
+  } else {
+    rows = await sql`
+      SELECT guideline_id, content,
+             1 - (embedding <=> ${vec}::vector) AS score
+      FROM protocol_chunks
+      ORDER BY embedding <=> ${vec}::vector
+      LIMIT ${limit}
+    `
+  }
+
+  return rows
 }
 
 export async function deleteByGuideline(guidelineId: string): Promise<void> {
-  const c = getMilvusClient()
-  await c.delete({
-    collection_name: COLLECTION,
-    filter: `guideline_id == "${guidelineId}"`,
-  })
+  const sql = getConnection()
+  await sql`DELETE FROM protocol_chunks WHERE guideline_id = ${guidelineId}`
 }

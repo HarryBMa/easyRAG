@@ -14,16 +14,17 @@ export const APIRoute = createAPIFileRoute('/api/guidelines/$id')({
     const db = getDb()
 
     const { rows } = await db.execute({
-      sql: `SELECT g.*, GROUP_CONCAT(
-              json_object(
-                'id', s.id, 'pubmed_id', s.pubmed_id, 'title', s.title,
-                'authors', s.authors, 'journal', s.journal, 'year', s.year,
-                'url', s.url, 'relevance_score', s.relevance_score
-              )
-            ) AS sources_raw
+      sql: `SELECT g.*,
+              json_agg(
+                json_build_object(
+                  'id', s.id, 'pubmed_id', s.pubmed_id, 'title', s.title,
+                  'authors', s.authors, 'journal', s.journal, 'year', s.year,
+                  'url', s.url, 'relevance_score', s.relevance_score
+                )
+              ) FILTER (WHERE s.id IS NOT NULL) AS sources
             FROM guidelines g
             LEFT JOIN sources s ON s.guideline_id = g.id
-            WHERE g.id = ?
+            WHERE g.id = $1
             GROUP BY g.id`,
       args: [params.id],
     })
@@ -37,28 +38,7 @@ export const APIRoute = createAPIFileRoute('/api/guidelines/$id')({
         typeof row.structured_json === 'string'
           ? JSON.parse(row.structured_json as string)
           : row.structured_json,
-      sources: row.sources_raw
-        ? (row.sources_raw as string)
-            .split('},{')
-            .map((s, i, arr) => {
-              const fixed =
-                (i === 0 ? '' : '{') + s + (i === arr.length - 1 ? '' : '}')
-              try {
-                return JSON.parse(
-                  i === 0 && arr.length > 1
-                    ? s + '}'
-                    : i === arr.length - 1 && arr.length > 1
-                      ? '{' + s
-                      : arr.length === 1
-                        ? s
-                        : '{' + s + '}',
-                )
-              } catch {
-                return null
-              }
-            })
-            .filter(Boolean)
-        : [],
+      sources: (row.sources as unknown[] | null) ?? [],
     }
 
     return json(guideline)
