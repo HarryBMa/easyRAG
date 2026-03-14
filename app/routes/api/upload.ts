@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { getDb, initDb } from '../../../lib/turso'
 import { extractText } from '../../../lib/ocr'
 import { structureGuideline } from '../../../lib/medllm'
-import { evaluateGuideline } from '../../../lib/scoring'
+import { evaluateGuideline, rescoreAfterPubmed } from '../../../lib/scoring'
 import { ensureCollection, upsertChunks } from '../../../lib/milvus'
 import { chunkText, embedBatch } from '../../../lib/embed'
 
@@ -98,22 +98,57 @@ async function processGuideline(
     console.warn('[upload] pgvector indexing skipped:', (err as Error).message)
   }
 
-  // 6. Trigger PubMed verification via Supabase Edge (best-effort)
+  // 6. Await PubMed verification, then re-score confidence
   const supabaseUrl = process.env.SUPABASE_URL
   const supabaseKey = process.env.SUPABASE_ANON_KEY
   if (supabaseUrl && supabaseKey) {
-    fetch(`${supabaseUrl}/functions/v1/verify-sources`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${supabaseKey}`,
-      },
-      body: JSON.stringify({
-        guideline_id: docId,
-        title: structured.title,
-        drugs: structured.drugs.map((d) => d.name),
-      }),
-    }).catch(() => {}) // fire-and-forget
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 20_000)
+
+      const pubmedRes = await fetch(`${supabaseUrl}/functions/v1/verify-sources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${supabaseKey}`,
+        },
+        body: JSON.stringify({
+          entity_type: 'guideline',
+          guideline_id: docId,
+          title: structured.title,
+          drugs: structured.drugs.map((d) => d.name),
+          confidence_score: structured.confidence_score,
+          source_quality: structured.source_quality,
+        }),
+        signal: controller.signal,
+      })
+      clearTimeout(timeout)
+
+      if (pubmedRes.ok) {
+        const pubmedData = await pubmedRes.json() as {
+          matches: number
+          contradiction_detected?: boolean
+        }
+
+        // Re-score now that we have PubMed results
+        const rescore = rescoreAfterPubmed({
+          confidenceScore: structured.confidence_score,
+          sourceQuality: structured.source_quality,
+          rawText,
+          pubmedCount: pubmedData.matches,
+          contradictionDetected: pubmedData.contradiction_detected ?? false,
+        })
+
+        await db.execute({
+          sql: `UPDATE guidelines
+                SET confidence_score = ?, status = ?, updated_at = NOW()
+                WHERE id = ?`,
+          args: [rescore.adjustedConfidence, rescore.status, docId],
+        })
+      }
+    } catch {
+      // PubMed timed out or failed — initial score stands
+    }
   }
 }
 

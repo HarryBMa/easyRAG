@@ -93,17 +93,22 @@ export async function initDb(): Promise<void> {
 
   await sql`
     CREATE TABLE IF NOT EXISTS sources (
-      id              TEXT PRIMARY KEY,
-      guideline_id    TEXT NOT NULL,
-      pubmed_id       TEXT,
-      title           TEXT,
-      authors         TEXT,
-      journal         TEXT,
-      year            INTEGER,
-      relevance_score REAL,
-      url             TEXT
+      id               TEXT PRIMARY KEY,
+      guideline_id     TEXT,
+      trick_id         TEXT,
+      pubmed_id        TEXT,
+      title            TEXT,
+      authors          TEXT,
+      journal          TEXT,
+      year             INTEGER,
+      relevance_score  REAL,
+      url              TEXT,
+      validation_type  TEXT DEFAULT 'unvalidated'
     )
   `
+  // Idempotent migrations for existing deployments
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS trick_id TEXT`
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS validation_type TEXT DEFAULT 'unvalidated'`
 
   await sql`
     CREATE TABLE IF NOT EXISTS votes (

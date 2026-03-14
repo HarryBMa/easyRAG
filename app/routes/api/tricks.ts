@@ -75,6 +75,26 @@ export const APIRoute = createAPIFileRoute('/api/tricks')({
     })
 
     const trick = rows[0]
+
+    // Fire PubMed verification for the new trick (best-effort, non-blocking)
+    const supabaseUrl = process.env.SUPABASE_URL
+    const supabaseKey = process.env.SUPABASE_ANON_KEY
+    if (supabaseUrl && supabaseKey) {
+      fetch(`${supabaseUrl}/functions/v1/verify-sources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${supabaseKey}`,
+        },
+        body: JSON.stringify({
+          entity_type: 'trick',
+          trick_id: id,
+          title: body.content.slice(0, 120),
+          trick_content: body.content,
+        }),
+      }).catch(() => {})
+    }
+
     return json({
       ...trick,
       badges: JSON.parse((trick.badges as string) || '[]'),

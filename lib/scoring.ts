@@ -10,6 +10,10 @@ export interface FlagResult {
   reasons: string[]
 }
 
+export interface PubmedRescore extends FlagResult {
+  adjustedConfidence: number
+}
+
 /**
  * Determine whether a guideline should be flagged for review.
  */
@@ -75,6 +79,48 @@ export function trendingScore(params: {
   const pubmedBoost = 1 + Math.log1p(pubmedCount) * 0.2
 
   return voteScore * recencyDecay * confidenceScore * pubmedBoost
+}
+
+/**
+ * Re-evaluate a guideline after PubMed results arrive.
+ * Boosts confidence when studies validate it, penalises when contradictions appear.
+ * Call this after the verify-sources Edge Function completes.
+ */
+export function rescoreAfterPubmed(params: {
+  confidenceScore: number
+  sourceQuality: number
+  rawText: string
+  pubmedCount: number
+  contradictionDetected?: boolean
+}): PubmedRescore {
+  const { confidenceScore, sourceQuality, rawText, pubmedCount, contradictionDetected = false } =
+    params
+  const base = evaluateGuideline({ confidenceScore, sourceQuality, rawText, pubmedCount })
+  const reasons = [...base.reasons]
+  let adjusted = confidenceScore
+
+  if (contradictionDetected) {
+    reasons.push('PubMed studies contain findings that may contradict this guideline')
+    adjusted = Math.max(0, adjusted - 0.2)
+  } else if (pubmedCount >= 3) {
+    adjusted = Math.min(1, adjusted + 0.1)
+  } else if (pubmedCount >= 1) {
+    adjusted = Math.min(1, adjusted + 0.05)
+  }
+
+  // Re-derive status using the adjusted confidence
+  const reEvaled = evaluateGuideline({
+    confidenceScore: adjusted,
+    sourceQuality,
+    rawText,
+    pubmedCount,
+  })
+
+  return {
+    status: contradictionDetected ? 'flagged' : reEvaled.status,
+    reasons: reEvaled.reasons.length ? reEvaled.reasons : reasons,
+    adjustedConfidence: adjusted,
+  }
 }
 
 /**
