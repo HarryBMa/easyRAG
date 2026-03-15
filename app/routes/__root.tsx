@@ -7,7 +7,7 @@ import {
   useNavigate,
   useRouterState,
 } from '@tanstack/react-router'
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { AuthProvider, useAuth } from '../context/AuthContext'
 import '../styles.css'
 
@@ -37,17 +37,54 @@ function RootComponent() {
       </head>
       <body>
         <AuthProvider>
-          <div className="flex h-screen overflow-hidden">
-            <Sidebar />
-            <div className="flex-1 flex flex-col min-w-0">
-              <Outlet />
+          <AuthGuard>
+            <div className="flex h-screen overflow-hidden">
+              <Sidebar />
+              <div className="flex-1 flex flex-col min-w-0">
+                <Outlet />
+              </div>
             </div>
-          </div>
+          </AuthGuard>
         </AuthProvider>
         <Scripts />
       </body>
     </html>
   )
+}
+
+/** Redirects to /auth/login when unauthenticated (except on /auth/* routes). */
+function AuthGuard({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth()
+  const navigate = useNavigate()
+  const state = useRouterState()
+  const path = state.location.pathname
+
+  useEffect(() => {
+    if (!loading && !user && !path.startsWith('/auth')) {
+      navigate({ to: '/auth/login' })
+    }
+  }, [loading, user, path, navigate])
+
+  // Show nothing while resolving session to avoid flash of protected content
+  if (loading) {
+    return (
+      <div
+        className="flex items-center justify-center h-screen"
+        style={{ background: '#080f1e' }}
+      >
+        <div className="w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
+      </div>
+    )
+  }
+
+  // On /auth/* routes, render without the shell
+  if (path.startsWith('/auth')) {
+    return <>{children}</>
+  }
+
+  if (!user) return null
+
+  return <>{children}</>
 }
 
 function Sidebar() {

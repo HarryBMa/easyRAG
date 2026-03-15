@@ -1,3 +1,6 @@
+import { useNavigate } from '@tanstack/react-router'
+import { useVote } from '../hooks/useVote'
+
 const BADGE_CONFIG: Record<string, { icon: string; label: string; color: string }> = {
   community_approved: { icon: '⭐', label: 'Community Approved', color: '#fbbf24' },
   multi_site:         { icon: '🏥', label: 'Multi-site',         color: '#38bdf8' },
@@ -24,32 +27,17 @@ interface Props {
   onVote?: () => void
 }
 
-// Stable anonymous user ID for demo (in production this would be auth-derived)
-const USER_ID =
-  typeof window !== 'undefined'
-    ? (() => {
-        let id = localStorage.getItem('ps_uid')
-        if (!id) {
-          id = Math.random().toString(36).slice(2)
-          localStorage.setItem('ps_uid', id)
-        }
-        return id
-      })()
-    : 'anon'
-
 export function TrickCard({ trick: t, onVote }: Props) {
-  const vote = async (type: 'up' | 'down') => {
-    await fetch('/api/vote', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        entity_type: 'trick',
-        entity_id: t.id,
-        user_id: USER_ID,
-        vote_type: type,
-      }),
-    })
-    onVote?.()
+  const { vote } = useVote()
+  const navigate = useNavigate()
+
+  const handleVote = async (type: 'up' | 'down') => {
+    const result = await vote('trick', t.id, type)
+    if (result.unauthenticated) {
+      navigate({ to: '/auth/login' })
+      return
+    }
+    if (result.ok) onVote?.()
   }
 
   return (
@@ -61,7 +49,7 @@ export function TrickCard({ trick: t, onVote }: Props) {
         {/* Vote column */}
         <div className="flex flex-col items-center gap-1 shrink-0">
           <button
-            onClick={() => vote('up')}
+            onClick={() => handleVote('up')}
             className="text-slate-600 hover:text-teal-400 transition-colors text-lg leading-none"
           >
             ▲
@@ -70,7 +58,7 @@ export function TrickCard({ trick: t, onVote }: Props) {
             {t.upvotes - t.downvotes}
           </span>
           <button
-            onClick={() => vote('down')}
+            onClick={() => handleVote('down')}
             className="text-slate-600 hover:text-red-400 transition-colors text-lg leading-none"
           >
             ▼
