@@ -2,6 +2,7 @@ import { createAPIFileRoute } from '@tanstack/react-start/api'
 import { randomUUID } from 'crypto'
 import { getDb, initDb } from '../../../lib/turso'
 import { computeBadges } from '../../../lib/scoring'
+import { verifyAuthHeader } from '../../../lib/auth'
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -12,15 +13,20 @@ function json(data: unknown, status = 200) {
 
 export const APIRoute = createAPIFileRoute('/api/vote')({
   POST: async ({ request }) => {
+    // Require authentication — user_id comes from the verified JWT
+    const userId = await verifyAuthHeader(request.headers.get('Authorization'))
+    if (!userId) {
+      return json({ error: 'Unauthorized' }, 401)
+    }
+
     await initDb()
-    const { entity_type, entity_id, user_id, vote_type } = (await request.json()) as {
+    const { entity_type, entity_id, vote_type } = (await request.json()) as {
       entity_type: 'guideline' | 'trick'
       entity_id: string
-      user_id: string
       vote_type: 'up' | 'down'
     }
 
-    if (!entity_type || !entity_id || !user_id || !vote_type) {
+    if (!entity_type || !entity_id || !vote_type) {
       return json({ error: 'Missing fields' }, 400)
     }
 
@@ -29,7 +35,7 @@ export const APIRoute = createAPIFileRoute('/api/vote')({
     // Upsert vote — if same direction, remove (toggle); if different, replace
     const { rows: existing } = await db.execute({
       sql: `SELECT id, vote_type FROM votes WHERE entity_type = ? AND entity_id = ? AND user_id = ?`,
-      args: [entity_type, entity_id, user_id],
+      args: [entity_type, entity_id, userId],
     })
 
     const table = entity_type === 'guideline' ? 'guidelines' : 'tricks'
@@ -49,7 +55,7 @@ export const APIRoute = createAPIFileRoute('/api/vote')({
       if (prev !== vote_type) {
         await db.execute({
           sql: `INSERT INTO votes (id, entity_type, entity_id, user_id, vote_type) VALUES (?, ?, ?, ?, ?)`,
-          args: [randomUUID(), entity_type, entity_id, user_id, vote_type],
+          args: [randomUUID(), entity_type, entity_id, userId, vote_type],
         })
         await db.execute({
           sql: `UPDATE ${table} SET ${vote_type === 'up' ? 'upvotes' : 'downvotes'} = ${vote_type === 'up' ? 'upvotes' : 'downvotes'} + 1 WHERE id = ?`,
@@ -59,7 +65,7 @@ export const APIRoute = createAPIFileRoute('/api/vote')({
     } else {
       await db.execute({
         sql: `INSERT INTO votes (id, entity_type, entity_id, user_id, vote_type) VALUES (?, ?, ?, ?, ?)`,
-        args: [randomUUID(), entity_type, entity_id, user_id, vote_type],
+        args: [randomUUID(), entity_type, entity_id, userId, vote_type],
       })
       await db.execute({
         sql: `UPDATE ${table} SET ${vote_type === 'up' ? 'upvotes' : 'downvotes'} = ${vote_type === 'up' ? 'upvotes' : 'downvotes'} + 1 WHERE id = ?`,

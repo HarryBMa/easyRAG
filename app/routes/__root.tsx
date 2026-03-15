@@ -4,9 +4,11 @@ import {
   Link,
   Outlet,
   Scripts,
+  useNavigate,
   useRouterState,
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
+import { AuthProvider, useAuth } from '../context/AuthContext'
 import '../styles.css'
 
 export const Route = createRootRoute({
@@ -34,12 +36,14 @@ function RootComponent() {
         <HeadContent />
       </head>
       <body>
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <div className="flex-1 flex flex-col min-w-0">
-            <Outlet />
+        <AuthProvider>
+          <div className="flex h-screen overflow-hidden">
+            <Sidebar />
+            <div className="flex-1 flex flex-col min-w-0">
+              <Outlet />
+            </div>
           </div>
-        </div>
+        </AuthProvider>
         <Scripts />
       </body>
     </html>
@@ -49,6 +53,13 @@ function RootComponent() {
 function Sidebar() {
   const state = useRouterState()
   const path = state.location.pathname
+  const { user, signOut, loading } = useAuth()
+  const navigate = useNavigate()
+
+  const handleSignOut = async () => {
+    await signOut()
+    navigate({ to: '/auth/login' })
+  }
 
   return (
     <aside
@@ -94,9 +105,40 @@ function Sidebar() {
         })}
       </nav>
 
-      {/* Footer */}
+      {/* User / Auth Footer */}
       <div className="px-4 py-4 border-t" style={{ borderColor: '#1e2d4a' }}>
-        <p className="text-[10px] text-slate-600">
+        {!loading && (
+          <>
+            {user ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {/* Avatar initials */}
+                  <div
+                    className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
+                    style={{ background: 'linear-gradient(135deg, #0284c7, #0d9488)' }}
+                  >
+                    {(user.email?.[0] ?? '?').toUpperCase()}
+                  </div>
+                  <p className="text-[11px] text-slate-400 truncate">{user.email}</p>
+                </div>
+                <button
+                  onClick={handleSignOut}
+                  className="w-full text-left text-[11px] text-slate-600 hover:text-slate-400 transition-colors"
+                >
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <Link
+                to="/auth/login"
+                className="text-[11px] text-sky-500 hover:text-sky-400 transition-colors"
+              >
+                Sign in
+              </Link>
+            )}
+          </>
+        )}
+        <p className="text-[10px] text-slate-700 mt-2">
           PowerSync Hackathon 2026
         </p>
       </div>

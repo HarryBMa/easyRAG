@@ -4,11 +4,15 @@
  * PowerSync client — syncs guidelines, tricks, and sources to an in-browser
  * SQLite database (OPFS-backed) for offline-first access.
  *
- * Requires env vars (set in .env):
- *   VITE_POWERSYNC_URL    — Your PowerSync instance URL
- *   VITE_POWERSYNC_TOKEN  — Static dev token or JWT endpoint
+ * Auth integration: PowerSync is fed the Supabase JWT so users only
+ * receive data they're allowed to sync (controlled via sync-rules.yaml).
  *
- * Without these the app falls back to direct REST API calls.
+ * Requires env vars (set in .env):
+ *   VITE_POWERSYNC_URL      — Your PowerSync instance URL
+ *   VITE_SUPABASE_URL       — Supabase project URL
+ *   VITE_SUPABASE_ANON_KEY  — Supabase anon key
+ *
+ * Without VITE_POWERSYNC_URL the app falls back to direct REST API calls.
  */
 
 import {
@@ -19,6 +23,7 @@ import {
   Table,
   type AbstractPowerSyncDatabase,
 } from '@powersync/web'
+import { getBrowserClient } from './auth'
 
 const guidelines = new Table({
   title: column.text,
@@ -74,11 +79,25 @@ export function getPowerSyncDb(): AbstractPowerSyncDatabase {
   })
 
   const psUrl = import.meta.env.VITE_POWERSYNC_URL as string | undefined
-  const psToken = import.meta.env.VITE_POWERSYNC_TOKEN as string | undefined
 
-  if (psUrl && psToken) {
+  if (psUrl) {
     _db.connect({
-      fetchCredentials: async () => ({ endpoint: psUrl, token: psToken }),
+      fetchCredentials: async () => {
+        // Use the live Supabase session JWT as the PowerSync token.
+        // This ties PowerSync auth to the same identity as the app.
+        const supabase = getBrowserClient()
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
+
+        if (!session) throw new Error('Not authenticated')
+
+        return {
+          endpoint: psUrl,
+          token: session.access_token,
+          expiresAt: new Date(session.expires_at! * 1000),
+        }
+      },
     } as never)
   }
 
