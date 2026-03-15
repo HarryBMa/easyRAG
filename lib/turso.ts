@@ -93,22 +93,50 @@ export async function initDb(): Promise<void> {
 
   await sql`
     CREATE TABLE IF NOT EXISTS sources (
-      id               TEXT PRIMARY KEY,
-      guideline_id     TEXT,
-      trick_id         TEXT,
-      pubmed_id        TEXT,
-      title            TEXT,
-      authors          TEXT,
-      journal          TEXT,
-      year             INTEGER,
-      relevance_score  REAL,
-      url              TEXT,
-      validation_type  TEXT DEFAULT 'unvalidated'
+      id                  TEXT PRIMARY KEY,
+      guideline_id        TEXT,
+      trick_id            TEXT,
+      pubmed_id           TEXT,
+      title               TEXT,
+      authors             TEXT,
+      journal             TEXT,
+      year                INTEGER,
+      relevance_score     REAL,
+      url                 TEXT,
+      validation_type     TEXT DEFAULT 'unvalidated',
+      -- multi-database fields
+      database_source     TEXT DEFAULT 'pubmed',
+      doi                 TEXT,
+      abstract            TEXT,
+      citation_count      INTEGER DEFAULT 0,
+      semantic_scholar_id TEXT,
+      openalex_id         TEXT,
+      tldr                TEXT
     )
   `
   // Idempotent migrations for existing deployments
   await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS trick_id TEXT`
   await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS validation_type TEXT DEFAULT 'unvalidated'`
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS database_source TEXT DEFAULT 'pubmed'`
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS doi TEXT`
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS abstract TEXT`
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS citation_count INTEGER DEFAULT 0`
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS semantic_scholar_id TEXT`
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS openalex_id TEXT`
+  await sql`ALTER TABLE sources ADD COLUMN IF NOT EXISTS tldr TEXT`
+
+  // Citation graph edges — paper-to-paper relationships from Semantic Scholar
+  await sql`
+    CREATE TABLE IF NOT EXISTS citation_edges (
+      id          TEXT PRIMARY KEY,
+      from_paper  TEXT NOT NULL,
+      to_paper    TEXT NOT NULL,
+      edge_type   TEXT NOT NULL,
+      guideline_id TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (from_paper, to_paper, edge_type)
+    )
+  `
 
   await sql`
     CREATE TABLE IF NOT EXISTS votes (
