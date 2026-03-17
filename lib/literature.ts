@@ -7,6 +7,10 @@
  *                                    preprints, book chapters
  *   - Semantic Scholar             — AI-enriched, citation graphs, TLDRs, open access
  *   - OpenAlex                     — 240 M+ works, concept mapping, fully open
+ *   - SearxNG / Vane               — self-hosted meta-search covering Google Scholar,
+ *                                    arXiv, CrossRef, BASE, and 70+ more engines.
+ *                                    Set SEARXNG_URL to enable. Vane (github.com/ItzCrazyKns/Vane)
+ *                                    is the recommended self-hosted front-end for SearxNG.
  *
  * Subscription-only (not integrated — require institutional access):
  *   - CINAHL      (EBSCO)      — nursing & allied health
@@ -22,6 +26,7 @@ export type DatabaseSource =
   | 'europe_pmc'
   | 'semantic_scholar'
   | 'openalex'
+  | 'searxng'
 
 export interface LiteratureResult {
   /** Dedup key — prefer DOI, else `source:id` */
@@ -47,6 +52,24 @@ export interface UnifiedSearchResult {
   results: LiteratureResult[]
   contradiction_detected: boolean
   by_database: Record<DatabaseSource, number>
+}
+
+// Academic SearxNG engines to query (avoids double-hitting sources we already
+// call directly: pubmed, semantic_scholar, openalex)
+const SEARXNG_ACADEMIC_ENGINES = [
+  'google scholar',
+  'arxiv',
+  'crossref',
+  'base',
+].join(',')
+
+/** Map a SearxNG engine name to a short display label stored in database_source */
+function searxngEngineLabel(engine: string): string {
+  if (engine.includes('google')) return 'Google Scholar'
+  if (engine === 'arxiv') return 'arXiv'
+  if (engine === 'crossref') return 'CrossRef'
+  if (engine === 'base') return 'BASE'
+  return engine
 }
 
 // ── Contradiction detection ─────────────────────────────────────────────────
@@ -295,6 +318,85 @@ export async function searchOpenAlex(
   })
 }
 
+// ── SearxNG / Vane ──────────────────────────────────────────────────────────
+// Self-hosted meta-search. Enables Google Scholar (no public API otherwise),
+// arXiv preprints, CrossRef, BASE, and any engine the instance has configured.
+//
+// Recommended setup: run Vane (https://github.com/ItzCrazyKns/Vane) locally,
+// then set SEARXNG_URL=http://localhost:3001 (or wherever your Vane instance is).
+//
+// Alternatively, run a bare SearxNG instance:
+//   docker run -d -p 8080:8080 searxng/searxng
+// and set SEARXNG_URL=http://localhost:8080
+
+interface SearxNGResult {
+  title: string
+  url: string
+  content?: string
+  author?: string
+  publishedDate?: string
+  engine?: string
+  score?: number
+}
+
+export async function searchSearxNG(
+  query: string,
+  searxngUrl: string,
+  limit = 10,
+): Promise<LiteratureResult[]> {
+  const params = new URLSearchParams({
+    q: query,
+    format: 'json',
+    categories: 'science',
+    engines: SEARXNG_ACADEMIC_ENGINES,
+    language: 'en',
+    pageno: '1',
+  })
+
+  const res = await fetch(`${searxngUrl.replace(/\/$/, '')}/search?${params}`, {
+    headers: { 'User-Agent': 'easyRAG/1.0' },
+    signal: AbortSignal.timeout(12_000),
+  })
+  if (!res.ok) return []
+  const data = await res.json()
+  const items: SearxNGResult[] = data.results ?? []
+
+  return items.slice(0, limit).map((r, i): LiteratureResult => {
+    // Extract DOI from CrossRef / DOI resolver URLs
+    const doiMatch = r.url.match(/doi\.org\/(10\.\S+)/i)
+    const doi = doiMatch?.[1]
+
+    // Parse year from publishedDate (ISO or partial)
+    let year: number | null = null
+    if (r.publishedDate) {
+      const y = parseInt(r.publishedDate.slice(0, 4), 10)
+      if (y > 1900 && y <= new Date().getFullYear() + 1) year = y
+    }
+
+    // arXiv ID → stable URL
+    const arxivMatch = r.url.match(/arxiv\.org\/abs\/([\d.]+)/i)
+    const canonicalUrl = arxivMatch
+      ? `https://arxiv.org/abs/${arxivMatch[1]}`
+      : r.url
+
+    const engine = r.engine ?? 'searxng'
+
+    return {
+      id: `searxng:${doi ?? canonicalUrl ?? i}`,
+      title: r.title ?? '',
+      authors: r.author ?? '',
+      journal: searxngEngineLabel(engine),
+      year,
+      abstract: r.content,
+      url: canonicalUrl,
+      doi,
+      citation_count: 0,
+      validation_type: 'unvalidated',
+      database_source: 'searxng',
+    }
+  })
+}
+
 // ── Deduplication ───────────────────────────────────────────────────────────
 
 function normaliseDoi(doi: string | undefined): string | undefined {
@@ -332,7 +434,7 @@ function deduplicate(results: LiteratureResult[]): LiteratureResult[] {
 // ── Unified search ──────────────────────────────────────────────────────────
 
 export async function unifiedLiteratureSearch(params: {
-  /** Human-readable query (used by Europe PMC, S2, OpenAlex) */
+  /** Human-readable query (used by Europe PMC, S2, OpenAlex, SearxNG) */
   query: string
   /** Structured term list for PubMed Title/Abstract search */
   terms?: string[]
@@ -340,6 +442,12 @@ export async function unifiedLiteratureSearch(params: {
   s2ApiKey?: string
   /** polite-pool contact email for OpenAlex */
   openAlexEmail?: string
+  /**
+   * URL of a SearxNG or Vane instance. When set, adds Google Scholar,
+   * arXiv, CrossRef and BASE results. Set via SEARXNG_URL env var.
+   * Vane: https://github.com/ItzCrazyKns/Vane
+   */
+  searxngUrl?: string
   maxPerDb?: number
 }): Promise<UnifiedSearchResult> {
   const {
@@ -348,21 +456,30 @@ export async function unifiedLiteratureSearch(params: {
     pubmedApiKey = '',
     s2ApiKey = '',
     openAlexEmail = '',
+    searxngUrl = '',
     maxPerDb = 8,
   } = params
 
-  const [pubmed, epmc, s2, openalex] = await Promise.allSettled([
-    searchPubMed(terms, pubmedApiKey, maxPerDb),
-    searchEuropePMC(query, maxPerDb),
-    searchSemanticScholar(query, s2ApiKey, maxPerDb),
-    searchOpenAlex(query, maxPerDb, openAlexEmail),
-  ])
+  const searches: Promise<PromiseSettledResult<LiteratureResult[]>>[] = [
+    Promise.allSettled([searchPubMed(terms, pubmedApiKey, maxPerDb)]).then((r) => r[0]),
+    Promise.allSettled([searchEuropePMC(query, maxPerDb)]).then((r) => r[0]),
+    Promise.allSettled([searchSemanticScholar(query, s2ApiKey, maxPerDb)]).then((r) => r[0]),
+    Promise.allSettled([searchOpenAlex(query, maxPerDb, openAlexEmail)]).then((r) => r[0]),
+  ]
+  if (searxngUrl) {
+    searches.push(
+      Promise.allSettled([searchSearxNG(query, searxngUrl, maxPerDb)]).then((r) => r[0]),
+    )
+  }
+
+  const [pubmed, epmc, s2, openalex, searxng] = await Promise.all(searches)
 
   const all = [
-    ...(pubmed.status === 'fulfilled' ? pubmed.value : []),
-    ...(epmc.status === 'fulfilled' ? epmc.value : []),
-    ...(s2.status === 'fulfilled' ? s2.value : []),
-    ...(openalex.status === 'fulfilled' ? openalex.value : []),
+    ...(pubmed?.status === 'fulfilled' ? pubmed.value : []),
+    ...(epmc?.status === 'fulfilled' ? epmc.value : []),
+    ...(s2?.status === 'fulfilled' ? s2.value : []),
+    ...(openalex?.status === 'fulfilled' ? openalex.value : []),
+    ...(searxng?.status === 'fulfilled' ? searxng.value : []),
   ]
 
   const deduped = deduplicate(all)
@@ -383,10 +500,11 @@ export async function unifiedLiteratureSearch(params: {
     results: deduped,
     contradiction_detected,
     by_database: {
-      pubmed: pubmed.status === 'fulfilled' ? pubmed.value.length : 0,
-      europe_pmc: epmc.status === 'fulfilled' ? epmc.value.length : 0,
-      semantic_scholar: s2.status === 'fulfilled' ? s2.value.length : 0,
-      openalex: openalex.status === 'fulfilled' ? openalex.value.length : 0,
+      pubmed: pubmed?.status === 'fulfilled' ? pubmed.value.length : 0,
+      europe_pmc: epmc?.status === 'fulfilled' ? epmc.value.length : 0,
+      semantic_scholar: s2?.status === 'fulfilled' ? s2.value.length : 0,
+      openalex: openalex?.status === 'fulfilled' ? openalex.value.length : 0,
+      searxng: searxng?.status === 'fulfilled' ? searxng.value.length : 0,
     },
   }
 }

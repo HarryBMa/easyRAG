@@ -9,6 +9,9 @@
  *   2. Europe PMC                 — incl. Cochrane, preprints, clinical guidelines
  *   3. Semantic Scholar           — AI-enriched, TLDRs, citation counts
  *   4. OpenAlex                   — 240 M+ works, open access
+ *   5. SearxNG / Vane             — Google Scholar, arXiv, CrossRef, BASE, 70+ more
+ *                                   Set SEARXNG_URL to enable.
+ *                                   Vane: https://github.com/ItzCrazyKns/Vane
  *
  * Results are deduplicated by DOI before persisting.
  *
@@ -18,6 +21,7 @@
  *   NCBI_API_KEY             — optional, raises rate limit from 3 → 10 req/s
  *   SEMANTIC_SCHOLAR_API_KEY — optional, raises limit to 10 req/s
  *   OPENALEX_EMAIL           — optional, enables polite-pool (higher limits)
+ *   SEARXNG_URL              — optional, enables SearxNG/Vane meta-search
  */
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
@@ -27,6 +31,10 @@ const NCBI_BASE = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
 const NCBI_KEY = Deno.env.get('NCBI_API_KEY') ?? ''
 const S2_KEY = Deno.env.get('SEMANTIC_SCHOLAR_API_KEY') ?? ''
 const OA_EMAIL = Deno.env.get('OPENALEX_EMAIL') ?? ''
+const SEARXNG_URL = Deno.env.get('SEARXNG_URL') ?? ''
+
+// Academic engines to query via SearxNG (excludes ones we already call directly)
+const SEARXNG_ENGINES = 'google scholar,arxiv,crossref,base'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -222,6 +230,51 @@ async function searchOpenAlex(query: string): Promise<UnifiedResult[]> {
   })
 }
 
+// ── SearxNG / Vane ────────────────────────────────────────────────────────────
+
+async function searchSearxNG(query: string): Promise<UnifiedResult[]> {
+  if (!SEARXNG_URL) return []
+  const params = new URLSearchParams({
+    q: query,
+    format: 'json',
+    categories: 'science',
+    engines: SEARXNG_ENGINES,
+    language: 'en',
+    pageno: '1',
+  })
+  const res = await fetch(`${SEARXNG_URL.replace(/\/$/, '')}/search?${params}`, {
+    headers: { 'User-Agent': 'easyRAG/1.0' },
+  })
+  if (!res.ok) return []
+  const data = await res.json()
+  const items: { title: string; url: string; content?: string; author?: string; publishedDate?: string; engine?: string }[] =
+    data.results ?? []
+
+  return items.slice(0, 8).map((r, i): UnifiedResult => {
+    const doiMatch = r.url.match(/doi\.org\/(10\.\S+)/i)
+    const doi = doiMatch?.[1]
+    const arxivMatch = r.url.match(/arxiv\.org\/abs\/([\d.]+)/i)
+    const canonicalUrl = arxivMatch ? `https://arxiv.org/abs/${arxivMatch[1]}` : r.url
+    let year: number | null = null
+    if (r.publishedDate) {
+      const y = parseInt(r.publishedDate.slice(0, 4), 10)
+      if (y > 1900) year = y
+    }
+    return {
+      id: `searxng:${doi ?? canonicalUrl ?? i}`,
+      title: r.title ?? '',
+      authors: r.author ?? '',
+      journal: r.engine ?? 'searxng',
+      year,
+      abstract: r.content,
+      url: canonicalUrl,
+      doi,
+      citation_count: 0,
+      database_source: 'searxng' as const,
+    }
+  })
+}
+
 // ── Deduplication ─────────────────────────────────────────────────────────────
 
 function dedup(results: UnifiedResult[]): UnifiedResult[] {
@@ -271,12 +324,13 @@ serve(async (req) => {
         ? [body.title, body.trick_content.slice(0, 120)]
         : [body.title, ...(body.drugs ?? []).slice(0, 3)]
 
-    // Run all four searches in parallel
-    const [pmRes, epmcRes, s2Res, oaRes] = await Promise.allSettled([
+    // Run all five searches in parallel (SearxNG is a no-op if SEARXNG_URL unset)
+    const [pmRes, epmcRes, s2Res, oaRes, searxRes] = await Promise.allSettled([
       searchPubMed(pubmedTerms),
       searchEuropePMC(query),
       searchSemanticScholar(query),
       searchOpenAlex(query),
+      searchSearxNG(query),
     ])
 
     const all = [
@@ -284,6 +338,7 @@ serve(async (req) => {
       ...(epmcRes.status === 'fulfilled' ? epmcRes.value : []),
       ...(s2Res.status === 'fulfilled' ? s2Res.value : []),
       ...(oaRes.status === 'fulfilled' ? oaRes.value : []),
+      ...(searxRes.status === 'fulfilled' ? searxRes.value : []),
     ]
 
     const articles = dedup(all)
@@ -359,6 +414,7 @@ serve(async (req) => {
           europe_pmc: epmcRes.status === 'fulfilled' ? epmcRes.value.length : 0,
           semantic_scholar: s2Res.status === 'fulfilled' ? s2Res.value.length : 0,
           openalex: oaRes.status === 'fulfilled' ? oaRes.value.length : 0,
+          searxng: searxRes.status === 'fulfilled' ? searxRes.value.length : 0,
         },
       },
       { headers: CORS },
