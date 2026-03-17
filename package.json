@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "vinxi dev",
     "build": "vinxi build",
-    "start": "vinxi start"
+    "start": "vinxi start",
+    "sync:obsidian": "tsx scripts/sync-obsidian.ts",
+    "sync:obsidian:watch": "tsx scripts/sync-obsidian.ts --watch"
   },
   "dependencies": {
     "@ai-sdk/openai": "^1.1.0",
@@ -37,6 +39,8 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "dotenv": "^16.4.7",
+    "tsx": "^4.19.2",
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^22.0.0",
     "@types/pdf-parse": "^1.1.4",
