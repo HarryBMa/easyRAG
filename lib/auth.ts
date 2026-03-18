@@ -1,14 +1,19 @@
 import { createClient } from '@supabase/supabase-js'
 
 /**
- * Browser-side Supabase client.
+ * Browser-side Supabase client — singleton to avoid multiple GoTrueClient warnings.
  * Uses VITE_* env vars so they are included in the client bundle.
  */
+let browserClient: ReturnType<typeof createClient> | null = null
+
 export function getBrowserClient() {
-  return createClient(
-    import.meta.env.VITE_SUPABASE_URL as string,
-    import.meta.env.VITE_SUPABASE_ANON_KEY as string,
-  )
+  if (!browserClient) {
+    browserClient = createClient(
+      import.meta.env.VITE_SUPABASE_URL as string,
+      import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+    )
+  }
+  return browserClient
 }
 
 /**

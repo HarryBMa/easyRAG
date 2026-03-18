@@ -23,6 +23,9 @@ export function createRouter() {
   )
 }
 
+// v1.x framework contract: router entry must export getRouter()
+export const getRouter = createRouter
+
 declare module '@tanstack/react-router' {
   interface Register {
     router: ReturnType<typeof createRouter>
