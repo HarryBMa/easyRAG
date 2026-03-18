@@ -1,0 +1,22 @@
+# PowerSync sync rules
+# Syncs guidelines, tricks, and sources to all connected clients (offline-first)
+
+bucket_definitions:
+  global_guidelines:
+    data:
+      - SELECT id, title, hospital, category, structured_json, confidence_score,
+               source_quality, status, upvotes, downvotes, pubmed_count, created_at, updated_at
+        FROM guidelines
+        WHERE status != 'deleted'
+
+  global_tricks:
+    data:
+      - SELECT id, content, author, hospital, category, upvotes, downvotes,
+               hospital_count, study_count, badges, related_guideline_ids, created_at
+        FROM tricks
+
+  sources:
+    data:
+      - SELECT id, guideline_id, pubmed_id, title, authors, journal, year,
+               relevance_score, url
+        FROM sources

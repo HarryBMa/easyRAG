@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  # Ollama — local LLM inference (MedGemma / Llama)
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # GPU support: uncomment if you have an NVIDIA GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Docling Serve — document parsing for PDFs, DOCX, tables, figures
+  # CPU image (~4 GB); swap tag for :latest-cuda for GPU acceleration
+  docling:
+    image: quay.io/docling-project/docling-serve:latest-cpu
+    ports:
+      - "5001:5001"
+    environment:
+      - DOCLING_SERVE_MAX_NUM_PAGES=200
+    volumes:
+      - docling_cache:/root/.cache
+
+volumes:
+  ollama_data:
+  docling_cache:
