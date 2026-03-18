@@ -6,11 +6,15 @@ import { readdirSync } from 'fs'
 import { resolve, join } from 'path'
 import { fileURLToPath } from 'url'
 import { setDefaultResultOrder } from 'dns'
+import { setGlobalDispatcher, Agent } from 'undici'
 import type { Plugin, ViteDevServer } from 'vite'
 import type { IncomingMessage, ServerResponse } from 'http'
 
 // Force IPv4 DNS resolution — WSL2 cannot route IPv6 to external hosts
 setDefaultResultOrder('ipv4first')
+
+// Increase fetch timeouts for slow Ollama LLM inference (4B model cold start)
+setGlobalDispatcher(new Agent({ headersTimeout: 300_000, bodyTimeout: 600_000 }))
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 

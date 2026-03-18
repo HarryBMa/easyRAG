@@ -8,6 +8,10 @@
  */
 
 import { Ollama } from 'ollama'
+import { Agent, setGlobalDispatcher } from 'undici'
+
+// Disable fetch timeouts for local Ollama — CPU inference can take several minutes
+setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }))
 
 let _client: Ollama | null = null
 
@@ -79,17 +83,30 @@ IMPORTANT: Return ONLY valid JSON. No prose, no markdown fences.
 
 Filename: ${filename}
 Guideline text:
-${rawText.slice(0, 5000)}`
+${rawText.slice(0, 2000)}`
 
   const ollama = getClient()
-  const response = await ollama.chat({
+
+  const stream = await ollama.chat({
     model: model(),
     messages: [{ role: 'user', content: prompt }],
     format: 'json',
-    options: { temperature: 0.1 },
-  })
+    options: {
+      temperature: 0.1,
+      num_predict: 800,  // cap output — thinking models can run forever otherwise
+      num_ctx: 4096,
+    },
+    stream: true,
+    think: false,        // disable chain-of-thought tokens if model supports it
+  } as Parameters<typeof ollama.chat>[0])
 
-  return JSON.parse(response.message.content) as StructuredGuideline
+  let content = ''
+  for await (const chunk of stream) {
+    const c = chunk as { message: { thinking?: string; content: string } }
+    content += c.message.content  // skip thinking tokens, only keep content
+  }
+
+  return JSON.parse(content) as StructuredGuideline
 }
 
 // ── Auto-categorize a trick ───────────────────────────────────────────────────
@@ -106,7 +123,7 @@ export async function categorizeTrick(content: string): Promise<string> {
   ]
 
   const ollama = getClient()
-  const response = await ollama.chat({
+  const stream = await ollama.chat({
     model: model(),
     messages: [
       {
@@ -118,9 +135,12 @@ Reply with ONLY the category name.`,
       },
     ],
     options: { temperature: 0 },
+    stream: true,
   })
 
-  const cat = response.message.content.trim().toLowerCase()
+  let result = ''
+  for await (const chunk of stream) result += chunk.message.content
+  const cat = result.trim().toLowerCase()
   return categories.includes(cat) ? cat : 'general'
 }
 

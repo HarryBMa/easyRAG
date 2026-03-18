@@ -3,9 +3,40 @@ import { randomUUID } from 'crypto'
 import { getDb, initDb } from '../../../lib/turso'
 import { extractText } from '../../../lib/ocr'
 import { structureGuideline } from '../../../lib/medllm'
-import { evaluateGuideline, rescoreAfterPubmed } from '../../../lib/scoring'
-import { ensureCollection, upsertChunks } from '../../../lib/milvus'
-import { chunkText, embedBatch } from '../../../lib/embed'
+import { evaluateGuideline } from '../../../lib/scoring'
+
+// Split raw text into protocol sections — each becomes its own guideline record.
+// Splits on markdown headers (## / ###) or lines that look like section titles
+// (ALL CAPS or Title Case lines followed by a blank line).
+function splitIntoSections(text: string, maxChars = 3000): string[] {
+  const headerRe = /^(#{1,3} .+|[A-ZÅÄÖ][A-ZÅÄÖ\s\-\/]{8,})$/m
+  const parts = text.split(/\n(?=#{1,3} |\n[A-ZÅÄÖ][A-ZÅÄÖ\s\-\/]{8,}\n)/)
+
+  const sections: string[] = []
+  let current = ''
+
+  for (const part of parts) {
+    if ((current + part).length > maxChars && current.length > 200) {
+      sections.push(current.trim())
+      current = part
+    } else {
+      current += '\n' + part
+    }
+  }
+  if (current.trim().length > 200) sections.push(current.trim())
+
+  // If no structural splits found, fall back to fixed-size chunks
+  if (sections.length <= 1) {
+    const chunks: string[] = []
+    for (let i = 0; i < text.length; i += maxChars) {
+      const chunk = text.slice(i, i + maxChars).trim()
+      if (chunk.length > 200) chunks.push(chunk)
+    }
+    return chunks
+  }
+
+  return sections
+}
 
 export const APIRoute = createAPIFileRoute('/api/upload')({
   POST: async ({ request }) => {
@@ -21,14 +52,14 @@ export const APIRoute = createAPIFileRoute('/api/upload')({
     const db = getDb()
     const docId = randomUUID()
 
+    // Placeholder record so UI can show "processing" immediately
     await db.execute({
       sql: `INSERT INTO guidelines (id, title, hospital, status) VALUES (?, ?, ?, 'processing')`,
       args: [docId, file.name, hospital ?? null],
     })
 
-    // Process async — return 202 immediately so UI can poll
-    processGuideline(docId, file, hospital).catch(async (err) => {
-      console.error('[upload] processing failed:', err)
+    processDocument(docId, file, hospital).catch(async (err) => {
+      console.error('[upload] ❌ pipeline failed:', err)
       await db.execute({
         sql: `UPDATE guidelines SET status = 'error' WHERE id = ?`,
         args: [docId],
@@ -39,117 +70,61 @@ export const APIRoute = createAPIFileRoute('/api/upload')({
   },
 })
 
-async function processGuideline(
-  docId: string,
-  file: File,
-  hospital?: string,
-) {
+async function processDocument(docId: string, file: File, hospital?: string) {
   const db = getDb()
+  console.log(`[upload] 🚀 start "${file.name}" (${docId})`)
 
-  // 1. OCR / text extraction
+  // 1. OCR
+  console.log(`[upload] 📄 step 1: OCR`)
   const rawText = await extractText(file)
+  console.log(`[upload] ✅ OCR done — ${rawText.length} chars`)
 
-  // 2. LLM structuring (MedGemma via Ollama)
-  const structured = await structureGuideline(rawText, file.name)
+  // 2. Split into protocol sections (one guideline per section)
+  const sections = splitIntoSections(rawText)
+  const MAX_SECTIONS = 12
+  const toProcess = sections.slice(0, MAX_SECTIONS)
+  console.log(`[upload] 📑 ${sections.length} sections found, processing ${toProcess.length}`)
 
-  // 3. Confidence / trash detection
-  const { status, reasons } = evaluateGuideline({
-    confidenceScore: structured.confidence_score,
-    sourceQuality: structured.source_quality,
-    rawText,
-  })
+  // Delete the placeholder and replace with real records
+  await db.execute({ sql: `DELETE FROM guidelines WHERE id = ?`, args: [docId] })
 
-  // 4. Persist to Turso
-  await db.execute({
-    sql: `UPDATE guidelines
-          SET title = ?, hospital = ?, category = ?, raw_text = ?,
-              structured_json = ?, confidence_score = ?, source_quality = ?,
-              status = ?, updated_at = NOW()
-          WHERE id = ?`,
-    args: [
-      structured.title,
-      hospital ?? null,
-      structured.category,
-      rawText,
-      JSON.stringify({ ...structured, flag_reasons: reasons }),
-      structured.confidence_score,
-      structured.source_quality,
-      status,
-      docId,
-    ],
-  })
-
-  // 5. Embed + index chunks in Milvus (best-effort)
-  try {
-    const chunks = chunkText(rawText)
-    await ensureCollection()
-    const embeddings = await embedBatch(chunks)
-    await upsertChunks(
-      chunks.map((content, i) => ({
-        id: `${docId}_${i}`,
-        guideline_id: docId,
-        entity_type: 'guideline',
-        content,
-        chunk_index: i,
-        embedding: embeddings[i],
-      })),
-    )
-  } catch (err) {
-    console.warn('[upload] pgvector indexing skipped:', (err as Error).message)
-  }
-
-  // 6. Await PubMed verification, then re-score confidence
-  const supabaseUrl = process.env.SUPABASE_URL
-  const supabaseKey = process.env.SUPABASE_ANON_KEY
-  if (supabaseUrl && supabaseKey) {
+  let processed = 0
+  for (const [i, section] of toProcess.entries()) {
+    console.log(`[upload] 🤖 section ${i + 1}/${toProcess.length} — ${section.length} chars`)
     try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 20_000)
+      const structured = await structureGuideline(section, file.name)
+      console.log(`[upload] ✅ section ${i + 1} — "${structured.title}" (${structured.category})`)
 
-      const pubmedRes = await fetch(`${supabaseUrl}/functions/v1/verify-sources`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${supabaseKey}`,
-        },
-        body: JSON.stringify({
-          entity_type: 'guideline',
-          guideline_id: docId,
-          title: structured.title,
-          drugs: structured.drugs.map((d) => d.name),
-          confidence_score: structured.confidence_score,
-          source_quality: structured.source_quality,
-        }),
-        signal: controller.signal,
+      const { status, reasons } = evaluateGuideline({
+        confidenceScore: structured.confidence_score,
+        sourceQuality: structured.source_quality,
+        rawText: section,
       })
-      clearTimeout(timeout)
 
-      if (pubmedRes.ok) {
-        const pubmedData = await pubmedRes.json() as {
-          matches: number
-          contradiction_detected?: boolean
-        }
-
-        // Re-score now that we have PubMed results
-        const rescore = rescoreAfterPubmed({
-          confidenceScore: structured.confidence_score,
-          sourceQuality: structured.source_quality,
-          rawText,
-          pubmedCount: pubmedData.matches,
-          contradictionDetected: pubmedData.contradiction_detected ?? false,
-        })
-
-        await db.execute({
-          sql: `UPDATE guidelines
-                SET confidence_score = ?, status = ?, updated_at = NOW()
-                WHERE id = ?`,
-          args: [rescore.adjustedConfidence, rescore.status, docId],
-        })
-      }
-    } catch {
-      // PubMed timed out or failed — initial score stands
+      await db.execute({
+        sql: `INSERT INTO guidelines
+              (id, title, hospital, category, raw_text, structured_json,
+               confidence_score, source_quality, status, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        args: [
+          randomUUID(),
+          structured.title,
+          hospital ?? null,
+          structured.category,
+          section,
+          JSON.stringify({ ...structured, flag_reasons: reasons }),
+          structured.confidence_score,
+          structured.source_quality,
+          status,
+        ],
+      })
+      processed++
+    } catch (err) {
+      console.warn(`[upload] ⚠️ section ${i + 1} failed:`, (err as Error).message)
     }
   }
+
+  console.log(`[upload] 🎉 done — ${processed}/${toProcess.length} protocols saved from "${file.name}"`)
 }
 
 function json(data: unknown, status = 200) {
