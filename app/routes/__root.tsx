@@ -7,7 +7,7 @@ import {
   useNavigate,
   useRouterState,
 } from '@tanstack/react-router'
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { AuthProvider, useAuth } from '../context/AuthContext'
 import '../styles.css'
 
@@ -166,6 +166,9 @@ function Sidebar() {
         })}
       </nav>
 
+      {/* Queue indicator */}
+      <QueueIndicator />
+
       {/* Footer */}
       <div className="px-4 py-3.5" style={{ borderTop: '1px solid rgba(0,212,255,0.06)' }}>
         {!loading && user ? (
@@ -257,6 +260,54 @@ export function PageShell({
         {action}
       </header>
       <div className="flex-1 overflow-y-auto">{children}</div>
+    </div>
+  )
+}
+
+/* ── Queue indicator ── */
+function QueueIndicator() {
+  const [active, setActive] = useState(0)
+  const [failed, setFailed] = useState(0)
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/queue')
+        if (!res.ok) return
+        const data = await res.json() as { pending: number; processing: number; failed: number }
+        setActive(data.pending + data.processing)
+        setFailed(data.failed)
+      } catch { /* server not ready yet */ }
+    }
+    poll()
+    const id = setInterval(poll, 5_000)
+    return () => clearInterval(id)
+  }, [])
+
+  if (active === 0 && failed === 0) return null
+
+  return (
+    <div className="mx-3 mb-2 px-3 py-2 rounded-lg" style={{
+      background: failed > 0 ? 'rgba(255,51,85,0.05)' : 'rgba(0,212,255,0.04)',
+      border: `1px solid ${failed > 0 ? 'rgba(255,51,85,0.15)' : 'rgba(0,212,255,0.1)'}`,
+    }}>
+      <div className="flex items-center gap-2">
+        {active > 0 && (
+          <span className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse" style={{
+            background: '#00d4ff',
+            boxShadow: '0 0 4px #00d4ff',
+          }} />
+        )}
+        {failed > 0 && active === 0 && (
+          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: '#ff3355' }} />
+        )}
+        <p className="type-label leading-none" style={{
+          color: failed > 0 && active === 0 ? '#ff335580' : '#00d4ff80',
+          letterSpacing: '0.1em',
+        }}>
+          {active > 0 ? `${active} QUEUED` : `${failed} FAILED`}
+        </p>
+      </div>
     </div>
   )
 }

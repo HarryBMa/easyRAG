@@ -150,9 +150,26 @@ export async function initDb(): Promise<void> {
     )
   `
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS processing_queue (
+      id           TEXT PRIMARY KEY,
+      filename     TEXT NOT NULL,
+      file_data    BYTEA NOT NULL,
+      file_mime    TEXT NOT NULL DEFAULT 'application/octet-stream',
+      hospital     TEXT,
+      status       TEXT NOT NULL DEFAULT 'pending',
+      attempts     INTEGER NOT NULL DEFAULT 0,
+      error        TEXT,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      started_at   TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ
+    )
+  `
+
   await sql`CREATE INDEX IF NOT EXISTS idx_guidelines_status   ON guidelines (status)`
   await sql`CREATE INDEX IF NOT EXISTS idx_guidelines_category ON guidelines (category)`
   await sql`CREATE INDEX IF NOT EXISTS idx_tricks_category     ON tricks (category)`
   await sql`CREATE INDEX IF NOT EXISTS idx_sources_guideline   ON sources (guideline_id)`
   await sql`CREATE INDEX IF NOT EXISTS idx_votes_entity        ON votes (entity_type, entity_id)`
+  await sql`CREATE INDEX IF NOT EXISTS idx_queue_status        ON processing_queue (status, created_at)`
 }
