@@ -4,6 +4,8 @@ import { getDb, initDb } from '../../../lib/turso'
 import { extractText } from '../../../lib/ocr'
 import { structureGuideline } from '../../../lib/medllm'
 import { evaluateGuideline } from '../../../lib/scoring'
+import { embedBatch, chunkText } from '../../../lib/embed'
+import { ensureCollection, upsertChunks } from '../../../lib/milvus'
 
 // Split raw text into protocol sections — each becomes its own guideline record.
 // Splits on markdown headers (## / ###) or lines that look like section titles
@@ -74,6 +76,9 @@ async function processDocument(docId: string, file: File, hospital?: string) {
   const db = getDb()
   console.log(`[upload] 🚀 start "${file.name}" (${docId})`)
 
+  // 0. Ensure pgvector table exists
+  await ensureCollection()
+
   // 1. OCR
   console.log(`[upload] 📄 step 1: OCR`)
   const rawText = await extractText(file)
@@ -101,13 +106,15 @@ async function processDocument(docId: string, file: File, hospital?: string) {
         rawText: section,
       })
 
+      const guidelineId = randomUUID()
+
       await db.execute({
         sql: `INSERT INTO guidelines
               (id, title, hospital, category, raw_text, structured_json,
                confidence_score, source_quality, status, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         args: [
-          randomUUID(),
+          guidelineId,
           structured.title,
           hospital ?? null,
           structured.category,
@@ -118,6 +125,22 @@ async function processDocument(docId: string, file: File, hospital?: string) {
           status,
         ],
       })
+
+      // 3b. Vector indexing — chunk the full section text and embed all at once
+      const chunks = chunkText(section)
+      const embeddings = await embedBatch(chunks)
+      await upsertChunks(
+        chunks.map((content, ci) => ({
+          id: `${guidelineId}-${ci}`,
+          guideline_id: guidelineId,
+          entity_type: 'guideline',
+          content,
+          chunk_index: ci,
+          embedding: embeddings[ci],
+        })),
+      )
+      console.log(`[upload] 🔢 section ${i + 1} — ${chunks.length} chunks indexed`)
+
       processed++
     } catch (err) {
       console.warn(`[upload] ⚠️ section ${i + 1} failed:`, (err as Error).message)

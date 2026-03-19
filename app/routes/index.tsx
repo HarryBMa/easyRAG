@@ -1,8 +1,25 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { PageShell } from './__root'
-import { ConfidenceBadge } from '../components/ConfidenceBadge'
-import { StatusBadge } from '../components/StatusBadge'
+import { ECGBackground } from '../components/ECGBackground'
+
+function useCountUp(target: number | undefined, duration = 900) {
+  const [value, setValue] = useState(0)
+  useEffect(() => {
+    if (target == null) return
+    setValue(0)
+    const start = Date.now()
+    const tick = () => {
+      const progress = Math.min((Date.now() - start) / duration, 1)
+      const eased = 1 - Math.pow(1 - progress, 4) // ease-out-quart
+      setValue(Math.round(eased * target))
+      if (progress < 1) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }, [target, duration])
+  return value
+}
 
 export const Route = createFileRoute('/')({
   component: DashboardPage,
@@ -16,167 +33,175 @@ interface TrendData {
     review_count: number
   }
   by_category: { category: string; count: number; avg_confidence: number }[]
-  research_gaps: { id: string; content: string; hospital_count: number; study_count: number }[]
   flagged: { id: string; title: string; confidence_score: number; status: string }[]
+}
+
+const CAT_COLORS: Record<string, string> = {
+  airway_management: '#00d4ff',
+  cardiac:           '#ff3355',
+  obstetric:         '#00ff88',
+  pediatric:         '#ffaa00',
+  pain_management:   '#a78bfa',
+  emergency:         '#ff6633',
+  general:           '#4a6585',
+}
+
+const CAT_LABELS: Record<string, string> = {
+  airway_management: 'Airway Mgmt',
+  cardiac:           'Cardiac',
+  obstetric:         'Obstetric',
+  pediatric:         'Pediatric',
+  pain_management:   'Pain Mgmt',
+  emergency:         'Emergency',
+  general:           'General',
 }
 
 function DashboardPage() {
   const { data } = useQuery<TrendData>({
     queryKey: ['trends'],
-    queryFn: () => fetch('/api/trends').then((r) => r.json()),
+    queryFn: () => fetch('/api/trends').then(r => r.json()),
     refetchInterval: 30_000,
   })
 
-  const stats = data?.stats
+  const s = data?.stats
 
   return (
-    <PageShell
-      title="Dashboard"
-      subtitle="Real-time overview of your anesthesia knowledge base"
-    >
-      <div className="p-8 space-y-8">
-        {/* Stat cards */}
+    <div className="relative h-full overflow-hidden">
+      <ECGBackground
+        avgConfidence={s?.avg_confidence}
+        flaggedCount={s?.flagged_count ?? 0}
+      />
+    <PageShell title="Dashboard" subtitle="KNOWLEDGE BASE · REAL-TIME OVERVIEW">
+      <div className="relative p-8 space-y-6" style={{ zIndex: 1 }}>
+
+        {/* Stat row */}
         <div className="grid grid-cols-4 gap-4">
+          <StatCard label="PROTOCOLS"  value={s?.total_guidelines}  color="#00d4ff" delay={0} />
           <StatCard
-            label="Total Guidelines"
-            value={stats?.total_guidelines ?? '—'}
-            icon="📋"
-            color="#0284c7"
+            label="AVG CONF."
+            value={s?.avg_confidence != null ? `${(s.avg_confidence * 100).toFixed(0)}%` : undefined}
+            color="#00ff88"
+            delay={1}
           />
-          <StatCard
-            label="Avg Confidence"
-            value={
-              stats?.avg_confidence != null
-                ? `${(stats.avg_confidence * 100).toFixed(0)}%`
-                : '—'
-            }
-            icon="🎯"
-            color="#0d9488"
-          />
-          <StatCard
-            label="Flagged"
-            value={stats?.flagged_count ?? '—'}
-            icon="⚠️"
-            color="#d97706"
-          />
-          <StatCard
-            label="Needs Review"
-            value={stats?.review_count ?? '—'}
-            icon="🔍"
-            color="#7c3aed"
-          />
+          <StatCard label="FLAGGED"    value={s?.flagged_count}     color="#ff3355" delay={2} />
+          <StatCard label="REVIEW"     value={s?.review_count}      color="#ffaa00" delay={3} />
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
-          {/* Category breakdown */}
-          <div
-            className="col-span-2 rounded-xl p-5"
-            style={{ background: '#111827', border: '1px solid #1e2d4a' }}
-          >
-            <h2 className="text-sm font-semibold text-slate-300 mb-4">
-              Guidelines by Category
-            </h2>
-            <div className="space-y-2.5">
-              {(data?.by_category ?? []).map((cat) => (
-                <CategoryRow key={cat.category} {...cat} />
-              ))}
-              {!data && (
-                <p className="text-sm text-slate-600">Loading…</p>
-              )}
-            </div>
-          </div>
-
-          {/* Research Gaps */}
-          <div
-            className="rounded-xl p-5"
-            style={{ background: '#111827', border: '1px solid #1e2d4a' }}
-          >
-            <h2 className="text-sm font-semibold text-slate-300 mb-1">
-              Research Opportunities
-            </h2>
-            <p className="text-xs text-slate-600 mb-4">
-              Multi-hospital tricks with no studies
-            </p>
-            <div className="space-y-3">
-              {(data?.research_gaps ?? []).slice(0, 5).map((gap) => (
-                <div key={gap.id}>
-                  <p className="text-xs text-slate-300 leading-snug">
-                    {gap.content.slice(0, 80)}…
-                  </p>
-                  <div className="flex gap-2 mt-1">
-                    <span className="text-[10px] text-teal-400">
-                      {gap.hospital_count} hospitals
-                    </span>
-                    <span className="text-[10px] text-slate-600">
-                      0 studies
-                    </span>
-                  </div>
-                </div>
-              ))}
-              {!data?.research_gaps?.length && (
-                <p className="text-xs text-slate-600">No gaps identified yet</p>
-              )}
-            </div>
+        {/* Category breakdown — full width, research gaps live in Trends */}
+        <div
+          className="rounded-xl p-5 fade-up delay-2"
+          style={{ background: '#0d1a2e', border: '1px solid rgba(0,212,255,0.08)' }}
+        >
+          <p className="type-label font-semibold uppercase mb-5" style={{ color: '#1e3650' }}>
+            PROTOCOLS BY CATEGORY
+          </p>
+          <div className="space-y-3.5">
+            {(data?.by_category ?? []).map((cat, i) => (
+              <CategoryRow key={cat.category} {...cat} index={i} />
+            ))}
+            {!data && (
+              <p style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 'var(--text-label)', color: '#1e3650' }}>
+                LOADING…
+              </p>
+            )}
+            {data && data.by_category.length === 0 && (
+              <p style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 'var(--text-label)', color: '#1e3650' }}>
+                NO DATA YET
+              </p>
+            )}
           </div>
         </div>
 
-        {/* Flagged / needs review */}
+        {/* Flagged */}
         {(data?.flagged?.length ?? 0) > 0 && (
           <div
-            className="rounded-xl p-5"
-            style={{ background: '#1a1222', border: '1px solid #3b1e2d' }}
+            className="rounded-xl p-5 fade-up delay-4"
+            style={{ background: 'rgba(255,51,85,0.03)', border: '1px solid rgba(255,51,85,0.1)' }}
           >
-            <h2 className="text-sm font-semibold text-amber-400 mb-4">
-              ⚠️ Flagged Guidelines — Needs Attention
-            </h2>
-            <div className="grid grid-cols-2 gap-3">
-              {(data?.flagged ?? []).map((g) => (
-                <Link
-                  key={g.id}
-                  to="/guidelines/$id"
-                  params={{ id: g.id }}
-                  className="flex items-center gap-3 p-3 rounded-lg hover:bg-white/5 transition-colors"
-                  style={{ border: '1px solid #3b1e2d' }}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-slate-200 truncate">{g.title}</p>
-                    <StatusBadge status={g.status} />
-                  </div>
-                  <ConfidenceBadge score={g.confidence_score} compact />
-                </Link>
-              ))}
+            <div className="flex items-center gap-2 mb-4">
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{
+                background: '#ff3355',
+                boxShadow: '0 0 5px #ff3355',
+              }} />
+              <p className="text-[9px] font-semibold tracking-[0.14em]" style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                color: '#ff3355',
+              }}>
+                FLAGGED · NEEDS ATTENTION
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {(data?.flagged ?? []).map(g => {
+                const confColor = g.confidence_score < 0.4 ? '#ff3355' : g.confidence_score < 0.7 ? '#ffaa00' : '#00ff88'
+                return (
+                  <Link
+                    key={g.id}
+                    to="/guidelines/$id"
+                    params={{ id: g.id }}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all"
+                    style={{ background: 'rgba(255,51,85,0.03)', border: '1px solid rgba(255,51,85,0.09)' }}
+                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,51,85,0.22)'}
+                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,51,85,0.09)'}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs truncate" style={{ fontFamily: "'Syne', sans-serif", color: '#c8d8eb' }}>
+                        {g.title}
+                      </p>
+                      <p className="text-[9px] mt-0.5 tracking-[0.06em]" style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        color: '#ff335570',
+                      }}>
+                        {g.status.toUpperCase().replace('_', ' ')}
+                      </p>
+                    </div>
+                    <span className="text-[10px] font-bold shrink-0" style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      color: confColor,
+                    }}>
+                      {Math.round(g.confidence_score * 100)}%
+                    </span>
+                  </Link>
+                )
+              })}
             </div>
           </div>
         )}
       </div>
     </PageShell>
+    </div>
   )
 }
 
 function StatCard({
   label,
   value,
-  icon,
   color,
+  delay,
 }: {
   label: string
-  value: string | number
-  icon: string
+  value?: string | number
   color: string
+  delay: number
 }) {
+  const rawNum = typeof value === 'number' ? value : undefined
+  const counted = useCountUp(rawNum, 900 + delay * 100)
+  const displayed = typeof value === 'string' ? value : (rawNum != null ? counted : undefined)
+  const delayClass = ['fade-up', 'fade-up delay-1', 'fade-up delay-2', 'fade-up delay-3'][delay] ?? 'fade-up'
+
   return (
     <div
-      className="rounded-xl p-5"
-      style={{ background: '#111827', border: '1px solid #1e2d4a' }}
+      className={`relative rounded-xl p-5 overflow-hidden ${delayClass}`}
+      style={{ background: '#0d1a2e', border: `1px solid ${color}12` }}
     >
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs text-slate-500 uppercase tracking-wider">
-          {label}
-        </span>
-        <span className="text-lg">{icon}</span>
-      </div>
-      <p className="text-2xl font-bold" style={{ color }}>
-        {value}
+      <div className="stat-sweep" />
+      <p className="type-label font-semibold mb-3" style={{ color: '#1e3650' }}>
+        {label}
+      </p>
+      <p className="type-stat font-bold leading-none" style={{
+        fontSize: 'var(--text-stat)',
+        color: displayed != null ? color : '#1a2d44',
+      }}>
+        {displayed ?? '—'}
       </p>
     </div>
   )
@@ -186,41 +211,43 @@ function CategoryRow({
   category,
   count,
   avg_confidence,
+  index,
 }: {
   category: string
   count: number
   avg_confidence: number
+  index: number
 }) {
-  const LABELS: Record<string, string> = {
-    airway_management: 'Airway Management',
-    cardiac: 'Cardiac',
-    obstetric: 'Obstetric',
-    pediatric: 'Pediatric',
-    pain_management: 'Pain Management',
-    emergency: 'Emergency',
-    general: 'General',
-  }
+  const barColor = avg_confidence > 0.7 ? '#00ff88' : avg_confidence > 0.4 ? '#ffaa00' : '#ff3355'
+  const catColor = CAT_COLORS[category] ?? '#4a6585'
+  const MAX = 20
+  const barPct = `${Math.min(100, (count / MAX) * 100)}%`
 
   return (
     <div className="flex items-center gap-3">
-      <span className="text-xs text-slate-400 w-32 shrink-0">
-        {LABELS[category] ?? category}
+      <span className="text-[10px] w-[100px] shrink-0" style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        color: '#2d4a68',
+      }}>
+        {CAT_LABELS[category] ?? category}
       </span>
-      <div className="flex-1 h-1.5 rounded-full bg-slate-800">
+      <div className="flex-1 h-px rounded-full overflow-hidden" style={{ background: 'rgba(0,212,255,0.05)' }}>
         <div
-          className="h-full rounded-full"
+          className="h-full rounded-full fill-bar"
           style={{
-            width: `${Math.min(100, count * 10)}%`,
-            background:
-              avg_confidence > 0.7
-                ? '#0d9488'
-                : avg_confidence > 0.4
-                  ? '#d97706'
-                  : '#dc2626',
-          }}
+            '--bar-w': barPct,
+            animationDelay: `${200 + index * 80}ms`,
+            background: barColor,
+            boxShadow: `0 0 5px ${barColor}55`,
+          } as React.CSSProperties}
         />
       </div>
-      <span className="text-xs text-slate-500 w-6 text-right">{count}</span>
+      <span className="text-[10px] w-5 text-right font-bold" style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        color: catColor,
+      }}>
+        {count}
+      </span>
     </div>
   )
 }

@@ -83,7 +83,7 @@ IMPORTANT: Return ONLY valid JSON. No prose, no markdown fences.
 
 Filename: ${filename}
 Guideline text:
-${rawText.slice(0, 2000)}`
+${rawText}`
 
   const ollama = getClient()
 
