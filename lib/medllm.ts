@@ -1,7 +1,7 @@
 /**
  * Medical LLM layer — uses Ollama for local inference.
  * Default model: medgemma (pull with: ollama pull medgemma)
- * Fallback:      llama3.2, mistral, phi4-mini
+ * Fallback chain: llama3.2 → mistral → phi4-mini
  *
  * MedGemma is Google's medical-domain Gemma fine-tune released in 2025.
  * It produces structured clinical output with better medical entity recognition.
@@ -13,6 +13,8 @@ import { Agent, setGlobalDispatcher } from 'undici'
 // Disable fetch timeouts for local Ollama — CPU inference can take several minutes
 setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }))
 
+const FALLBACK_MODELS = ['llama3.2', 'mistral', 'phi4-mini']
+
 let _client: Ollama | null = null
 
 function getClient(): Ollama {
@@ -22,7 +24,7 @@ function getClient(): Ollama {
   return _client
 }
 
-function model(): string {
+function primaryModel(): string {
   return process.env.OLLAMA_MODEL ?? 'medgemma'
 }
 
@@ -54,94 +56,175 @@ export interface StructuredGuideline {
   source_quality: number
 }
 
+// ── JSON helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Try to extract valid JSON from a model response.
+ * Handles markdown fences, leading prose, and trailing garbage.
+ */
+function extractJson(raw: string): unknown {
+  // 1. Direct parse
+  try { return JSON.parse(raw) } catch { /* continue */ }
+
+  // 2. Strip markdown fences (```json ... ```)
+  const stripped = raw
+    .replace(/^```(?:json)?\s*/im, '')
+    .replace(/\s*```\s*$/m, '')
+    .trim()
+  try { return JSON.parse(stripped) } catch { /* continue */ }
+
+  // 3. Find the first balanced { ... } block
+  const start = raw.indexOf('{')
+  if (start !== -1) {
+    let depth = 0
+    for (let i = start; i < raw.length; i++) {
+      if (raw[i] === '{') depth++
+      else if (raw[i] === '}') {
+        depth--
+        if (depth === 0) {
+          try { return JSON.parse(raw.slice(start, i + 1)) } catch { break }
+        }
+      }
+    }
+  }
+
+  throw new Error(`Model output is not valid JSON:\n${raw.slice(0, 300)}`)
+}
+
+// ── Model execution with fallback chain ──────────────────────────────────────
+
+async function chatJson(
+  messages: { role: string; content: string }[],
+  opts: { num_predict?: number; num_ctx?: number; temperature?: number } = {},
+): Promise<string> {
+  const ollama = getClient()
+  const models = [primaryModel(), ...FALLBACK_MODELS]
+
+  for (const m of models) {
+    try {
+      const stream = await ollama.chat({
+        model: m,
+        messages: messages as Parameters<typeof ollama.chat>[0]['messages'],
+        format: 'json',
+        options: {
+          temperature: opts.temperature ?? 0.1,
+          num_predict: opts.num_predict ?? 1500,
+          num_ctx: opts.num_ctx ?? 4096,
+        },
+        stream: true,
+        think: false,
+      } as Parameters<typeof ollama.chat>[0])
+
+      let content = ''
+      for await (const chunk of stream) {
+        const c = chunk as { message: { thinking?: string; content: string } }
+        content += c.message.content
+      }
+      return content
+    } catch (err) {
+      const msg = (err as Error).message ?? ''
+      const isNotFound =
+        msg.includes('model') && (msg.includes('not found') || msg.includes('pull'))
+      if (isNotFound && models.indexOf(m) < models.length - 1) {
+        console.warn(`[medllm] model "${m}" unavailable, trying next fallback`)
+        continue
+      }
+      throw err
+    }
+  }
+
+  throw new Error('All Ollama models unavailable')
+}
+
 // ── Guideline structuring ─────────────────────────────────────────────────────
+
+const STRUCTURE_SCHEMA = `{
+  "title": "concise guideline title",
+  "category": "one of: airway_management | cardiac | obstetric | pediatric | pain_management | emergency | general",
+  "drugs": [{"name":"","dose":"","route":"","timing":""}],
+  "steps": ["ordered step 1", "step 2"],
+  "indications": ["indication 1"],
+  "contraindications": ["contraindication 1"],
+  "notes": ["key note 1"],
+  "confidence_score": 0.85,
+  "source_quality": 0.7
+}`
 
 export async function structureGuideline(
   rawText: string,
   filename: string,
 ): Promise<StructuredGuideline> {
-  const prompt = `You are MedGemma, a medical AI assistant specializing in anesthesia and perioperative care.
+  const userPrompt = `You are a medical AI specializing in anesthesia and perioperative care.
 
-Analyze the anesthesia guideline below and return a JSON object with these exact fields:
-{
-  "title": "concise guideline title",
-  "category": "one of: airway_management | cardiac | obstetric | pediatric | pain_management | emergency | general",
-  "drugs": [{"name":"","dose":"","route":"","timing":""}],
-  "steps": ["ordered step 1", "step 2", ...],
-  "indications": ["indication 1", ...],
-  "contraindications": ["contraindication 1", ...],
-  "notes": ["key note 1", ...],
-  "confidence_score": <float 0-1>,
-  "source_quality": <float 0-1>
-}
+Analyze the anesthesia guideline below and return a JSON object matching this schema exactly:
+${STRUCTURE_SCHEMA}
 
 Scoring guidance:
-- confidence_score: 0.9+ = specific, evidence-based, detailed. 0.5-0.9 = reasonable. <0.5 = vague, conflicting, or generic.
-- source_quality: 0.9+ = explicit citations. 0.5-0.9 = from reputable org (ASA, ESA, etc). <0.3 = no sources.
+- confidence_score: 0.9+ = specific, evidence-based, detailed. 0.5–0.9 = reasonable. <0.5 = vague or generic.
+- source_quality: 0.9+ = explicit citations. 0.5–0.9 = from reputable org (ASA, ESA, etc). <0.3 = no sources.
 
-IMPORTANT: Return ONLY valid JSON. No prose, no markdown fences.
+IMPORTANT: Return ONLY valid JSON. No prose, no markdown fences, no explanation.
 
 Filename: ${filename}
 Guideline text:
 ${rawText}`
 
-  const ollama = getClient()
+  // First attempt
+  const raw = await chatJson([{ role: 'user', content: userPrompt }])
 
-  const stream = await ollama.chat({
-    model: model(),
-    messages: [{ role: 'user', content: prompt }],
-    format: 'json',
-    options: {
-      temperature: 0.1,
-      num_predict: 800,  // cap output — thinking models can run forever otherwise
-      num_ctx: 4096,
-    },
-    stream: true,
-    think: false,        // disable chain-of-thought tokens if model supports it
-  } as Parameters<typeof ollama.chat>[0])
-
-  let content = ''
-  for await (const chunk of stream) {
-    const c = chunk as { message: { thinking?: string; content: string } }
-    content += c.message.content  // skip thinking tokens, only keep content
+  try {
+    return extractJson(raw) as StructuredGuideline
+  } catch {
+    // Retry — show the model exactly what it returned and ask it to fix it
+    console.warn('[medllm] JSON parse failed on first attempt, retrying with correction prompt')
+    const correctionRaw = await chatJson([
+      { role: 'user', content: userPrompt },
+      { role: 'assistant', content: raw },
+      {
+        role: 'user',
+        content:
+          'Your previous response was not valid JSON. Return ONLY the JSON object, nothing else. No markdown, no explanation.',
+      },
+    ])
+    return extractJson(correctionRaw) as StructuredGuideline
   }
-
-  return JSON.parse(content) as StructuredGuideline
 }
 
 // ── Auto-categorize a trick ───────────────────────────────────────────────────
 
-export async function categorizeTrick(content: string): Promise<string> {
-  const categories = [
-    'airway_management',
-    'cardiac',
-    'obstetric',
-    'pediatric',
-    'pain_management',
-    'emergency',
-    'general',
-  ]
+const VALID_CATEGORIES = [
+  'airway_management',
+  'cardiac',
+  'obstetric',
+  'pediatric',
+  'pain_management',
+  'emergency',
+  'general',
+] as const
 
-  const ollama = getClient()
-  const stream = await ollama.chat({
-    model: model(),
-    messages: [
+export async function categorizeTrick(content: string): Promise<string> {
+  const raw = await chatJson(
+    [
       {
         role: 'user',
-        content: `Classify this anesthesia tip into one category.
-Categories: ${categories.join(', ')}
-Tip: ${content}
-Reply with ONLY the category name.`,
+        content: `Classify this anesthesia tip into exactly one category.
+Return JSON: {"category": "<one of: ${VALID_CATEGORIES.join(' | ')}>"}
+
+Tip: ${content}`,
       },
     ],
-    options: { temperature: 0 },
-    stream: true,
-  })
+    { num_predict: 60, temperature: 0 },
+  )
 
-  let result = ''
-  for await (const chunk of stream) result += chunk.message.content
-  const cat = result.trim().toLowerCase()
-  return categories.includes(cat) ? cat : 'general'
+  try {
+    const parsed = extractJson(raw) as { category?: string }
+    const cat = parsed?.category?.toLowerCase().trim() ?? ''
+    return (VALID_CATEGORIES as readonly string[]).includes(cat) ? cat : 'general'
+  } catch {
+    // Plain text fallback
+    const lower = raw.toLowerCase().trim()
+    return (VALID_CATEGORIES as readonly string[]).find((c) => lower.includes(c)) ?? 'general'
+  }
 }
 
 // ── Health check ──────────────────────────────────────────────────────────────
@@ -150,8 +233,23 @@ export async function ollamaHealthy(): Promise<boolean> {
   try {
     const ollama = getClient()
     const list = await ollama.list()
-    return list.models.some((m) => m.name.includes(model().split(':')[0]))
+    return list.models.length > 0
   } catch {
     return false
+  }
+}
+
+/** Returns the first available model name, or null if Ollama is unreachable. */
+export async function availableModel(): Promise<string | null> {
+  try {
+    const ollama = getClient()
+    const list = await ollama.list()
+    const primary = primaryModel()
+    const found = list.models.find((m) => m.name.includes(primary.split(':')[0]))
+    if (found) return found.name
+    // Fall back to first available model
+    return list.models[0]?.name ?? null
+  } catch {
+    return null
   }
 }

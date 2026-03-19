@@ -74,22 +74,28 @@ function searxngEngineLabel(engine: string): string {
 
 // ── Contradiction detection ─────────────────────────────────────────────────
 
+/**
+ * High-confidence contradiction signals — phrases that specifically negate
+ * a practice rather than merely discussing risks (which every medical paper does).
+ * Deliberately conservative to avoid false positives on normal medical language.
+ */
 const CONTRADICTION_SIGNALS = [
-  'contraindicated',
-  'not recommended',
-  'ineffective',
-  'no benefit',
-  'harmful',
-  'adverse',
-  'refutes',
-  'disproven',
-  'failed to show',
-  'no significant difference',
-  'safety concern',
-  'risk of',
-  'danger',
   'should not be used',
-  'increased mortality',
+  'must not be used',
+  'is contraindicated',
+  'are contraindicated',
+  'has been disproven',
+  'have been disproven',
+  'was refuted',
+  'were refuted',
+  'failed to demonstrate efficacy',
+  'no clinical benefit',
+  'evidence does not support',
+  'practice should be abandoned',
+  'withdrawn from use',
+  'recalled due to',
+  'caused increased mortality',
+  'significantly increased mortality',
 ]
 
 export function detectContradiction(texts: string[]): boolean {

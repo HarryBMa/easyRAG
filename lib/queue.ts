@@ -17,9 +17,10 @@ import { randomUUID } from 'crypto'
 import { getDb } from './turso'
 import { extractText } from './ocr'
 import { structureGuideline } from './medllm'
-import { evaluateGuideline } from './scoring'
+import { evaluateGuideline, rescoreAfterPubmed } from './scoring'
 import { embedBatch, chunkText } from './embed'
 import { ensureCollection, upsertChunks } from './milvus'
+import { unifiedLiteratureSearch } from './literature'
 
 const POLL_MS = 5_000
 const MAX_ATTEMPTS = 3
@@ -202,6 +203,16 @@ async function runPipeline(job: RawJob): Promise<void> {
         })),
       )
 
+      // Fire-and-forget literature search — don't block the pipeline
+      backgroundLiteratureSearch(
+        guidelineId,
+        structured.title,
+        structured.drugs.map(d => d.name),
+        structured.confidence_score,
+        structured.source_quality,
+        section,
+      ).catch(err => console.warn(`[queue] 📚 literature search failed for "${structured.title}":`, (err as Error).message))
+
       console.log(`[queue] ✅ section ${i + 1}/${toProcess.length} — "${structured.title}"`)
       saved++
     } catch (err) {
@@ -210,6 +221,98 @@ async function runPipeline(job: RawJob): Promise<void> {
   }
 
   if (saved === 0) throw new Error('All sections failed to process')
+}
+
+// ── Background literature search + rescore ────────────────────────────────────
+
+async function backgroundLiteratureSearch(
+  guidelineId: string,
+  title: string,
+  drugNames: string[],
+  confidenceScore: number,
+  sourceQuality: number,
+  rawText: string,
+): Promise<void> {
+  const db = getDb()
+
+  // Build search query from title + up to 3 key drugs
+  const terms = [title, ...drugNames.slice(0, 3).filter(Boolean)]
+  const query = terms.join(' ')
+
+  const litResult = await unifiedLiteratureSearch({
+    query,
+    terms,
+    pubmedApiKey: process.env.NCBI_API_KEY ?? '',
+    s2ApiKey: process.env.SEMANTIC_SCHOLAR_API_KEY ?? '',
+    openAlexEmail: process.env.OPENALEX_EMAIL ?? '',
+    searxngUrl: process.env.SEARXNG_URL ?? '',
+    maxPerDb: 5,
+  })
+
+  if (!litResult.results.length) return
+
+  // Persist results to sources table
+  for (const r of litResult.results.slice(0, 15)) {
+    await db.execute({
+      sql: `INSERT INTO sources
+              (id, guideline_id, pubmed_id, title, authors, journal, year,
+               relevance_score, url, validation_type, database_source, doi,
+               abstract, citation_count, semantic_scholar_id, openalex_id, tldr)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING`,
+      args: [
+        randomUUID(),
+        guidelineId,
+        r.pubmed_id ?? null,
+        r.title,
+        r.authors,
+        r.journal,
+        r.year ?? null,
+        r.citation_count > 0 ? Math.min(1, r.citation_count / 100) : 0.5,
+        r.url,
+        r.validation_type,
+        r.database_source,
+        r.doi ?? null,
+        r.abstract ?? null,
+        r.citation_count,
+        r.semantic_scholar_id ?? null,
+        r.openalex_id ?? null,
+        r.tldr ?? null,
+      ],
+    })
+  }
+
+  // Re-score confidence based on PubMed evidence
+  const rescore = rescoreAfterPubmed({
+    confidenceScore,
+    sourceQuality,
+    rawText,
+    pubmedCount: litResult.by_database.pubmed,
+    contradictionDetected: litResult.contradiction_detected,
+  })
+
+  await db.execute({
+    sql: `UPDATE guidelines
+          SET confidence_score = ?,
+              source_quality   = ?,
+              status           = ?,
+              pubmed_count     = ?,
+              updated_at       = NOW()
+          WHERE id = ?`,
+    args: [
+      rescore.adjustedConfidence,
+      sourceQuality,
+      rescore.status,
+      litResult.by_database.pubmed,
+      guidelineId,
+    ],
+  })
+
+  console.log(
+    `[queue] 📚 "${title}" — ${litResult.results.length} sources found, ` +
+    `confidence ${confidenceScore.toFixed(2)} → ${rescore.adjustedConfidence.toFixed(2)}` +
+    (litResult.contradiction_detected ? ' ⚠️ contradiction detected' : ''),
+  )
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
