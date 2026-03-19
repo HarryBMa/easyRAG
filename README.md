@@ -1,24 +1,24 @@
-# ProtocolSync AI
+# Project Aether
 
-> **The self-correcting, crowd-powered anesthesia guideline harmonizer.**
+> **Anesthesia protocol intelligence — ingest, structure, search, and harmonize clinical guidelines with a local medical AI stack.**
 > Built for the PowerSync hackathon 2026.
 
 ---
 
 ## What it does
 
-ProtocolSync AI ingests anesthesia protocols from any format (scanned PDFs, images, DOCX, plain text), structures them with a local medical LLM, cross-references them against PubMed, and syncs everything offline-first across hospitals via PowerSync.
+Project Aether ingests anesthesia protocols from any format (scanned PDFs, images, DOCX, plain text), structures them with a local medical LLM (MedGemma), cross-references them against PubMed, and makes them instantly searchable via pgvector semantic search.
 
 | Feature | How |
 |---|---|
-| **OCR extraction** | Tesseract.js (local WASM) — drop-in for DeepSeek-OCR-2 ONNX |
-| **Medical structuring** | MedGemma via Ollama (local inference, no cloud required) |
-| **Confidence scoring** | Auto-rates each guideline 0–1; flags low-quality for review |
-| **PubMed verification** | Supabase Edge Function → NCBI E-utilities |
-| **Crowd-sourced tricks** | Stack Overflow-style upvote system with auto-badges |
-| **Research gaps** | Surfaces tricks used at 5+ hospitals with 0 studies |
-| **Offline-first sync** | PowerSync + Supabase Postgres |
-| **Vector search** | pgvector (HNSW cosine) for semantic guideline retrieval |
+| **Document ingestion** | Docling Serve (primary) → DeepSeek VL2 → pdf-parse / mammoth / Tesseract fallback chain |
+| **Medical structuring** | MedGemma via Ollama — extracts title, category, drugs, steps, indications, contraindications |
+| **Confidence scoring** | Auto-rates each guideline 0–1; flags low-quality protocols for peer review |
+| **Vector indexing** | Full-section chunking → OpenAI embeddings → pgvector HNSW (LEANN in-memory layer for hot queries) |
+| **PubMed verification** | Cross-references citations against NCBI E-utilities via Supabase Edge Function |
+| **Crowd-sourced tricks** | Stack Overflow-style upvote system for anesthesia tips with auto-badges |
+| **Research gaps** | Surfaces tips used at 5+ hospitals with zero published studies |
+| **Knowledge base health** | Real-time ECG dashboard — confidence + flagged count drives heart rate and waveform |
 
 ---
 
@@ -29,11 +29,12 @@ ProtocolSync AI ingests anesthesia protocols from any format (scanned PDFs, imag
 - Node.js 20+
 - [Ollama](https://ollama.ai) with MedGemma: `ollama pull medgemma`
 - A [Supabase](https://supabase.com) project (free tier works)
+- OpenAI API key (for embeddings)
 
 ### 1. Clone & install
 
 ```bash
-git clone <repo>
+git clone https://github.com/HarryBMa/easyRAG.git
 cd easyRAG
 npm install
 ```
@@ -41,17 +42,25 @@ npm install
 ### 2. Start Ollama
 
 ```bash
-docker compose up -d
+ollama serve
+# in another terminal:
+ollama pull medgemma
 ```
 
 ### 3. Configure environment
 
 ```bash
 cp .env.example .env
-# Minimum required:
-#   DATABASE_URL   — Supabase Postgres connection string
-#   OPENAI_API_KEY — for embeddings
-#   SUPABASE_URL + SUPABASE_ANON_KEY — for PubMed edge function
+```
+
+Minimum required:
+
+```env
+DATABASE_URL=postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+OPENAI_API_KEY=sk-...
+OLLAMA_MODEL=medgemma
+SUPABASE_URL=https://[ref].supabase.co
+SUPABASE_ANON_KEY=...
 ```
 
 ### 4. Run
@@ -66,26 +75,34 @@ npm run dev
 ## Architecture
 
 ```
-Browser (TanStack Start + React)
-  ├── PowerSync ─────────────── offline-first Postgres sync
+Browser (TanStack Start + React 19)
   └── REST API
-        ├── /api/upload ──────── OCR → MedGemma → Supabase Postgres + pgvector
-        ├── /api/guidelines ──── CRUD + trending sort
-        ├── /api/tricks ─────── crowd tips + voting
-        ├── /api/vote ────────── upvote / downvote
-        └── /api/trends ─────── research gaps + stats
+        ├── /api/upload ──── OCR → MedGemma → Postgres + pgvector chunks
+        ├── /api/guidelines ─ CRUD + trending / newest sort
+        ├── /api/query ────── semantic search (LEANN → pgvector fallback)
+        ├── /api/tricks ───── crowd tips + voting
+        ├── /api/vote ──────── upvote / downvote
+        ├── /api/trends ────── knowledge base stats + research gaps
+        └── /api/citation-graph ─ Semantic Scholar paper relationships
+
+Upload pipeline:
+  File → extractText() ──────── Docling Serve / DeepSeek VL2 / Tesseract
+       → splitIntoSections() ── markdown headers or fixed 3 000-char chunks
+       → structureGuideline() ─ MedGemma (full section, num_ctx 4096)
+       → evaluateGuideline() ── confidence scoring + flag detection
+       → INSERT guidelines ──── Postgres
+       → embedBatch() ─────────  OpenAI text-embedding-3-small (per chunk)
+       → upsertChunks() ──────── protocol_chunks (pgvector HNSW)
 
 Lib:
-  lib/ocr.ts        Tesseract.js (DeepSeek-OCR-2 swap-in)
+  lib/ocr.ts        Docling Serve → DeepSeek VL2 → pdf-parse / Tesseract
   lib/medllm.ts     Ollama → MedGemma structuring + categorization
-  lib/scoring.ts    Confidence scoring + trash detection + badges
-  lib/turso.ts      Supabase Postgres client + schema init
-  lib/milvus.ts     Vector store (HNSW cosine, pgvector)
-  lib/embed.ts      OpenAI text-embedding-3-small (pluggable)
-  lib/powersync.ts  Browser-side PowerSync client
-
-Supabase Edge:
-  verify-sources/   PubMed / NCBI E-utilities citation lookup
+  lib/scoring.ts    Confidence scoring + flag detection + badge system
+  lib/turso.ts      Postgres client + schema migrations (guidelines, tricks, sources, votes)
+  lib/milvus.ts     pgvector store + LEANN in-memory HNSW acceleration
+  lib/leann.ts      hnswlib-node HNSW index (falls back to pgvector if unavailable)
+  lib/embed.ts      OpenAI embeddings with chunk splitting (350-word windows, 50-word overlap)
+  lib/literature.ts Multi-database literature search (PubMed, Semantic Scholar, OpenAlex)
 ```
 
 ---
@@ -95,38 +112,39 @@ Supabase Edge:
 | Layer | Technology |
 |---|---|
 | Frontend | TanStack Start · React 19 · Tailwind CSS v4 |
-| State | TanStack Query |
+| State / fetching | TanStack Query |
 | Database | Supabase Postgres |
-| Sync | PowerSync |
-| Vector store | pgvector (HNSW cosine) |
-| OCR | Tesseract.js 5 (local WASM) |
-| Medical LLM | MedGemma via Ollama |
+| Vector store | pgvector (HNSW cosine) + hnswlib-node in-memory layer |
+| OCR | Docling Serve · DeepSeek VL2 (Ollama) · Tesseract.js 5 |
+| Medical LLM | MedGemma via Ollama (local, no cloud required) |
 | Embeddings | OpenAI text-embedding-3-small |
-| PubMed | Supabase Edge → NCBI E-utilities |
+| Literature | PubMed NCBI · Semantic Scholar · OpenAlex |
 
 ---
 
 ## Environment variables
 
-See [`.env.example`](.env.example). Minimum for local dev:
-
-```
-DATABASE_URL=postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+```env
+# Required
+DATABASE_URL=postgresql://...
 OPENAI_API_KEY=sk-...
+SUPABASE_URL=https://[ref].supabase.co
+SUPABASE_ANON_KEY=eyJ...
+
+# Ollama (defaults shown)
+OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=medgemma
+
+# Optional — Docling Serve for best PDF/DOCX extraction
+DOCLING_URL=http://localhost:5001
+
+# Optional — embedding dimension (match your model)
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIM=1536
 ```
 
 ## Swapping models
 
-- **LLM**: set `OLLAMA_MODEL` — any Ollama model works (`llama3.2`, `mistral`, `phi4`)
-- **OCR**: replace `performOCR()` in `lib/ocr.ts` with your ONNX/DeepSeek call
+- **Medical LLM**: set `OLLAMA_MODEL` — any Ollama model works (`llama3.2`, `mistral`, `phi4`)
+- **OCR**: Docling Serve is the primary path; DeepSeek VL2 and Tesseract are automatic fallbacks
 - **Embeddings**: set `EMBEDDING_MODEL` — any OpenAI-compatible embedding endpoint
-
-## PowerSync setup
-
-1. Create project at [app.powersync.com](https://app.powersync.com)
-2. Connect your Supabase Postgres database
-3. Upload `sync-rules.yaml`
-4. Set `VITE_POWERSYNC_URL` + `VITE_POWERSYNC_TOKEN` in `.env`
-
-Without PowerSync the app works fully — guidelines load on demand instead of syncing in real-time.

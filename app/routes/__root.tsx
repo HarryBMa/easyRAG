@@ -16,7 +16,7 @@ export const Route = createRootRoute({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'ProtocolSync AI' },
+      { title: 'Project Aether' },
     ],
     links: [
       // Preconnect reduces Google Fonts latency from ~200ms to ~50ms
@@ -101,24 +101,26 @@ function Sidebar() {
       <div className="px-5 pt-6 pb-4">
         <div className="flex items-center gap-2.5 mb-3">
           <div className="relative w-8 h-8 flex items-center justify-center shrink-0 rounded-lg" style={{
-            background: 'linear-gradient(135deg, rgba(0,212,255,0.12), rgba(0,255,136,0.06))',
-            border: '1px solid rgba(0,212,255,0.22)',
+            background: 'linear-gradient(135deg, rgba(0,212,255,0.10), rgba(0,255,136,0.04))',
+            border: '1px solid rgba(0,212,255,0.20)',
           }}>
-            <span className="text-xs font-bold" style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              color: '#00d4ff',
-            }}>Ps</span>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <ellipse cx="10" cy="10" rx="8" ry="3.2" stroke="#00d4ff" strokeWidth="1" opacity="0.65"/>
+              <ellipse cx="10" cy="10" rx="8" ry="3.2" stroke="#00d4ff" strokeWidth="1" opacity="0.65" transform="rotate(60 10 10)"/>
+              <ellipse cx="10" cy="10" rx="8" ry="3.2" stroke="#00d4ff" strokeWidth="1" opacity="0.65" transform="rotate(120 10 10)"/>
+              <circle cx="10" cy="10" r="1.8" fill="#00d4ff"/>
+            </svg>
           </div>
           <div>
             <p className="text-sm font-bold leading-none mb-0.5" style={{ fontFamily: "'Syne', sans-serif", color: '#e2eaf5' }}>
-              ProtocolSync
+              Project Aether
             </p>
             <p className="text-[9px] leading-none tracking-widest" style={{
               fontFamily: "'IBM Plex Mono', monospace",
               color: '#00d4ff',
               opacity: 0.7,
             }}>
-              AI · BETA
+              BETA
             </p>
           </div>
         </div>
