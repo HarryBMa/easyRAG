@@ -12,11 +12,36 @@
 
 ```
 easyRAG/
-├── README.md      # Minimal placeholder: "# easyRAG\npowersync hackathon"
-└── CLAUDE.md      # This file
+├── README.md              # Project Aether — anesthesia protocol intelligence system
+├── CLAUDE.md              # This file
+├── package.json           # Node.js / TypeScript dependencies
+├── tsconfig.json
+├── vite.config.ts
+├── docker-compose.yml     # Docling Serve container
+├── sync-rules.yaml        # PowerSync sync rules
+├── .env.example           # All environment variables documented here
+├── supabase/              # Supabase migrations and Edge Functions
+├── scripts/               # Utility scripts (Obsidian vault sync etc.)
+├── app/                   # TanStack Start frontend + API routes
+│   ├── routes/api/        # REST API handlers (upload, guidelines, query, etc.)
+│   └── routes/            # Page routes (index, guidelines, tricks, trends)
+└── lib/                   # Backend pipeline modules
+    ├── ocr.ts             # Document extraction chain (Docling → OpenDataLoader → pdf-parse → Tesseract)
+    ├── medllm.ts          # Ollama / MedGemma structuring + categorization
+    ├── embed.ts           # OpenAI embeddings + chunking
+    ├── milvus.ts          # pgvector store + HNSW operations
+    ├── leann.ts           # hnswlib-node in-memory HNSW index
+    ├── scoring.ts         # Confidence scoring + badge system
+    ├── literature.ts      # PubMed / Semantic Scholar / OpenAlex search
+    ├── turso.ts           # Postgres client + schema migrations
+    ├── rag.ts             # Core RAG pipeline (extract → chunk → categorize)
+    ├── db.ts              # Database helpers
+    ├── auth.ts            # Supabase auth helpers
+    ├── powersync.ts       # PowerSync client setup
+    ├── queue.ts           # Upload queue
+    ├── obsidian.ts        # Obsidian vault sync
+    └── citationGraph.ts   # Semantic Scholar citation graph
 ```
-
-No source code, dependencies, tests, or configuration files exist yet. The project is in planning/setup phase.
 
 ---
 
@@ -109,16 +134,17 @@ git push -u origin feature/your-feature-name
 - Do not introduce secrets, API keys, or credentials into committed files.
 - Do not add emoji to code comments or documentation unless explicitly requested.
 
-### Technology choices (TBD)
+### Technology choices
 
-The stack has not been finalized. When the user specifies a language/framework, update this section. Likely candidates given the hackathon context:
-
-- **Language:** Python (common for RAG/ML pipelines) or TypeScript/Node.js
-- **Vector store:** Likely a lightweight option (e.g., FAISS, Chroma, pgvector)
-- **LLM / embeddings:** To be determined (OpenAI, Anthropic, or open-source)
-- **PowerSync:** Real-time offline-first sync layer — see [PowerSync docs](https://docs.powersync.com)
-
-Update this file as the stack solidifies.
+- **Language:** TypeScript / Node.js (TanStack Start + Vite)
+- **Frontend:** React 19 + TanStack Router + TanStack Query + Tailwind CSS v4
+- **Database:** Supabase Postgres with pgvector (HNSW cosine similarity)
+- **Vector store:** pgvector (HNSW) + hnswlib-node in-memory layer (LEANN)
+- **OCR chain:** Docling Serve → OpenDataLoader PDF → pdf-parse / mammoth → DeepSeek VL2 / Tesseract.js
+- **Medical LLM:** MedGemma via Ollama (local)
+- **Embeddings:** OpenAI text-embedding-3-small
+- **Literature:** PubMed NCBI · Semantic Scholar · OpenAlex
+- **Sync:** PowerSync (real-time offline-first)
 
 ---
 

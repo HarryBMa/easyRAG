@@ -146,5 +146,47 @@ EMBEDDING_DIM=1536
 ## Swapping models
 
 - **Medical LLM**: set `OLLAMA_MODEL` — any Ollama model works (`llama3.2`, `mistral`, `phi4`)
-- **OCR**: Docling Serve is the primary path; DeepSeek VL2 and Tesseract are automatic fallbacks
+- **OCR**: Docling Serve is the primary path; OpenDataLoader PDF, DeepSeek VL2, and Tesseract are automatic fallbacks
 - **Embeddings**: set `EMBEDDING_MODEL` — any OpenAI-compatible embedding endpoint
+
+---
+
+## Ecosystem tools
+
+The following open-source projects were evaluated for integration into Project Aether.
+
+### ✅ [opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf) — **integrated**
+
+OpenDataLoader PDF is the current #1 open-source PDF parser on public benchmarks.  It converts PDFs to structured Markdown, preserving tables, multi-column layouts, and formulas.  The Node.js SDK (`@opendataloader/pdf`) is already in the dependency tree and is wired into the OCR fallback chain:
+
+```
+Docling Serve → OpenDataLoader PDF → pdf-parse → DeepSeek VL2 OCR → Tesseract.js
+```
+
+**Requires Java 11+ on `PATH`.**  Set `OPENDATALOADER_ENABLED=false` in `.env` to skip it.
+
+---
+
+### ✅ [unsloth](https://github.com/unslothai/unsloth) — **companion tool (offline)**
+
+Unsloth is a Python library that fine-tunes LLMs up to 2× faster with up to 80% less VRAM.  It is not part of the TypeScript runtime, but you can use it to create custom fine-tunes of the local Ollama models (e.g., a MedGemma variant trained on your own anesthesia protocols) and then deploy them via Ollama.
+
+Workflow:
+1. Export protocol data from Supabase as JSONL.
+2. Fine-tune with Unsloth (`pip install unsloth`).
+3. Export the fine-tuned model in GGUF format and load it with `ollama create`.
+4. Set `OLLAMA_MODEL=<your-fine-tune>` in `.env`.
+
+---
+
+### ✅ [OpenViking](https://github.com/volcengine/OpenViking) — **optional context layer**
+
+OpenViking (Volcengine / ByteDance) is a filesystem-style context database for AI agents.  It stores memories, resources, and skills in a hierarchical `viking://` URI tree and generates tiered L0/L1/L2 summaries to minimize token usage.
+
+It fits as an optional upgrade to the existing LEANN/pgvector retrieval layer — its HTTP API can be called from TypeScript.  Particularly relevant for long-running or multi-session agent workflows where persistent, evolving memory is needed.  No integration is included by default; see the OpenViking docs to run the server and connect it to `/api/query`.
+
+---
+
+### ⚠️ [openrag](https://github.com/langflow-ai/openrag) — **overlapping reference**
+
+OpenRAG (Langflow + Docling + OpenSearch) implements a RAG pipeline that largely mirrors what Project Aether already provides.  Its key components — Docling document parsing, vector search, and chat interface — are all covered by existing code.  OpenRAG is a useful architectural reference but is not integrated directly because it would replace rather than extend the current stack.

@@ -2,15 +2,19 @@
  * OCR & document extraction pipeline.
  *
  * Priority order:
- *   1. Docling Serve  — best-in-class for PDFs, DOCX, tables, figures
- *   2. DeepSeek VL2   — LLM-based OCR for images/graphs (via Ollama)
- *   3. pdf-parse      — fast text-layer extraction for digital PDFs
- *   4. mammoth        — DOCX text extraction
- *   5. Tesseract.js   — WASM OCR as final fallback
+ *   1. Docling Serve       — best-in-class for PDFs, DOCX, tables, figures
+ *   2. OpenDataLoader PDF  — #1 open-source PDF benchmark; table/formula extraction
+ *   3. DeepSeek VL2        — LLM-based OCR for images/graphs (via Ollama)
+ *   4. pdf-parse           — fast text-layer extraction for digital PDFs
+ *   5. mammoth             — DOCX text extraction
+ *   6. Tesseract.js        — WASM OCR as final fallback
  */
 
 import { createWorker } from 'tesseract.js'
 import Ollama from 'ollama'
+import { writeFile, readdir, readFile, rm, mkdtemp } from 'node:fs/promises'
+import { join, basename } from 'node:path'
+import { tmpdir } from 'node:os'
 
 export type OcrInput = Buffer | string // Buffer for binary data, string for file path
 
@@ -51,6 +55,53 @@ async function callDocling(
     return text.trim().length > 20 ? text.trim() : null
   } catch {
     return null
+  }
+}
+
+/**
+ * Extract text from a PDF using OpenDataLoader PDF.
+ * Ranks #1 on open-source PDF benchmarks; supports tables, formulas, and
+ * multi-column layouts without requiring a running server.
+ * Requires Java 11+ on PATH. Returns null if unavailable or conversion fails.
+ */
+async function callOpenDataLoader(
+  buffer: Buffer,
+  filename: string,
+): Promise<string | null> {
+  if (process.env.OPENDATALOADER_ENABLED === 'false') return null
+
+  let tmpDir: string | null = null
+  try {
+    const { convert } = await import('@opendataloader/pdf')
+
+    tmpDir = await mkdtemp(join(tmpdir(), 'odl-'))
+
+    // Sanitize: strip any directory components to prevent path traversal
+    const safeName = basename(filename)
+    const inputPath = join(tmpDir, safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`)
+    const outputDir = join(tmpDir, 'out')
+
+    await writeFile(inputPath, buffer)
+
+    // convert() produces one .md file per input PDF in outputDir
+    await convert([inputPath], { outputDir, format: 'markdown' })
+
+    const files = await readdir(outputDir)
+    const mdFile = files.find((f) => f.endsWith('.md'))
+    if (!mdFile) return null
+
+    const text = await readFile(join(outputDir, mdFile), 'utf-8')
+    return text.trim().length > 20 ? text.trim() : null
+  } catch {
+    return null
+  } finally {
+    if (tmpDir) {
+      rm(tmpDir, { recursive: true, force: true }).catch((err) => {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[ocr] OpenDataLoader temp dir cleanup failed:', err)
+        }
+      })
+    }
   }
 }
 
@@ -122,6 +173,9 @@ export async function extractText(file: File): Promise<string> {
   // --- Fallbacks ---
 
   if (isPdf) {
+    const openDlResult = await callOpenDataLoader(buffer, file.name)
+    if (openDlResult) return openDlResult
+
     const pdfParse = (await import('pdf-parse')).default
     const result = await pdfParse(buffer)
     if (result.text.trim().length > 50) return result.text
