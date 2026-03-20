@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^1.1.0",
+    "@opendataloader/pdf": "^2.0.2",
     "@powersync/react": "^1.5.0",
     "@powersync/web": "^1.5.0",
     "@radix-ui/react-dialog": "^1.1.4",
@@ -41,15 +42,15 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "dotenv": "^16.4.7",
-    "tsx": "^4.19.2",
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^22.0.0",
     "@types/pdf-parse": "^1.1.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/uuid": "^10.0.0",
+    "dotenv": "^16.4.7",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite-tsconfig-paths": "^5.1.4"
   }
